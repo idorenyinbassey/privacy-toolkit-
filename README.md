@@ -139,6 +139,148 @@ DNSPort 5353
 AutomapHostsOnResolve 1
 ```
 
+## User Manual — CLI (`main.py`)
+
+Works everywhere: Termux, a VM, or standalone Kali. Run it from the
+project root (the folder containing `main.py` and `privacyguard/`).
+
+### Quick flags (one-shot, no menu)
+
+| Command | What it does |
+|---|---|
+| `python3 main.py` | Opens the interactive menu (below) |
+| `python3 main.py --status` | Prints environment summary + leak report and exits |
+| `python3 main.py --dns-leak-check` | Runs the DNS leak check and exits |
+| `python3 main.py --start` | Starts full anonymity mode (Tor path) and exits |
+| `python3 main.py --stop` | Stops full anonymity mode and exits |
+| `python3 main.py --clean` | Wipes local shell-history traces and exits |
+| `python3 main.py --rotate-ip` | Requests a new Tor circuit (new exit IP) and exits |
+| `python3 main.py --gui` | Launches the desktop GUI (needs a display) |
+
+### Interactive menu
+
+Running `python3 main.py` with no flags drops you into a numbered
+menu, re-shown after every action so you can chain steps:
+
+```
+=== PrivacyGuard v2 ===
+Env: Kali GNU/Linux | root=True
+ 1) Environment + leak report
+ 2) DNS leak check
+ 3) Start / Stop Tor
+ 4) Rotate Tor circuit (new exit IP)
+ 5) Randomize MAC / hostname
+ 6) Enable / disable Tor kill switch
+ 7) Anti-recon: fingerprint hardening (sysctls)
+ 8) Anti-recon: portscan auto-block (iptables)
+ 9) Anti-recon: live scan watch (scapy, full Linux)
+10) Anti-recon: watch HTTP access log (Termux-friendly)
+11) Configure Tor bridges (Tor blocked on this network)
+12) Generate/test proxychains config (Tor optional)
+13) Proxy-only system-wide kill switch, NO Tor (redsocks)
+14) VM snapshot reset (VirtualBox/virsh, run from host)
+15) Clean local traces
+16) Save / decrypt encrypted session log
+17) Start FULL anonymity mode (Tor path)
+18) Stop FULL anonymity mode
+19) Launch GUI
+ 0) Exit
+>
+```
+
+Type the number and press Enter. Options that need more input (a
+hostname, a passphrase, proxy lines) will prompt for it right after
+you pick them. A typical session before a scan:
+
+```
+> 1          # confirm environment/root, note current public IP
+> 17         # start full anonymity mode (Tor, MAC/hostname randomize, kill switch)
+> 2          # then: y  -> DNS leak check, expecting a tunnel to be active
+> 9          # optional: watch for scanners touching this box while you work
+```
+...and afterward:
+```
+> 18         # stop full anonymity mode, revert networking
+> 15         # y/N -> also wipe /var/log if authorized to
+> 16         # save -> encrypt this session's action log with a passphrase
+```
+
+Menu options 11 (bridges) and 12 (proxychains) accept **multi-line
+paste**: type or paste one entry per line, then press Enter on an
+empty line to finish and continue.
+
+Option 13 (proxy-only kill switch) asks for the proxy host, port, and
+type (`socks5`/`socks4`/`http-connect`) — use this instead of 17 when
+the target network is known to block Tor traffic. Follow it with
+option 2 to confirm no DNS leak.
+
+## User Manual — GUI (`gui.py`)
+
+Full Linux desktop only (a VM with a display, or standalone Kali/
+Debian with X11) — Termux has no GUI, use the CLI there.
+
+### Launching
+
+```bash
+python3 -c "import tkinter"     # sanity check; if it errors:
+sudo apt install python3-tk     # Debian/Kali
+cd privacy-toolkit-             # project root
+python3 gui.py                  # or: python3 main.py --gui
+```
+
+A single window opens (900×700) with a row of tabs across the top and
+a black **Console output** pane pinned across the bottom — every
+action's output (successes, errors, leak reports) streams there in
+real time, same text you'd see in the CLI.
+
+### Tabs
+
+- **Status** — shows the detected environment (root, distro, which
+  tools are installed) and has buttons for *Refresh Environment* and
+  *Leak Report*. A checkbox ("A kill switch/tunnel is active right
+  now") plus *Run DNS Leak Check* lives here too — tick it before
+  checking if you expect to be tunneled, so the verdict is judged
+  correctly.
+- **Tor** — Start/Stop Tor, *Rotate Circuit* for a new exit IP, *Check
+  Tor Active*, enable/disable the Tor kill switch, a text box to paste
+  bridge lines into plus *Configure Bridges*, and buttons to start/stop
+  **full** anonymity mode in one click.
+- **Proxy** — paste proxy lines (one per line) and generate a
+  proxychains config, with a **chain mode** dropdown (dynamic/strict/
+  random) and an **"Include Tor in chain"** checkbox — leave it
+  unticked when the target blocks Tor. Below that, the system-wide
+  proxy-only kill switch: enter host/port/type and enable/disable it
+  (full Linux + root, needs `redsocks`). A note reminds you this is
+  TCP-only — check DNS leaks after.
+- **Anti-Recon** — toggle fingerprint hardening and portscan
+  auto-block; run a bounded-duration live scan watch (set seconds and
+  whether to auto-block detected scanners); or point *Watch HTTP
+  access log* at a log file (via *Browse*) for alert-only scanner
+  detection — has its own *Stop* button since that watch runs until
+  you stop it.
+- **VM Snapshots** — pick VirtualBox or virsh, enter the VM/domain
+  name and snapshot name, and *Reset to Snapshot*. Run this from the
+  **host** machine — it has no effect from inside a guest.
+- **Cleanup / Logs** — *Clean Traces* (with an optional, root-gated
+  "also wipe /var/log" checkbox), plus save/decrypt for the encrypted
+  session log: enter a passphrase and *Save Encrypted Log*, or browse
+  to a `.enc` file, enter its passphrase, and *Decrypt & Show* to read
+  it back in the console pane.
+
+### Notes on GUI behavior
+
+- Every button runs its action in a background thread, so the window
+  never freezes — watch the console pane for progress/results rather
+  than the button itself.
+- Root-only actions (MAC/hostname randomization, kill switches,
+  sysctl hardening, portscan block) will just print a permission
+  message in the console if you're not running as root — launch with
+  `sudo python3 gui.py` on a VM/standalone box if you need those.
+- Closing the window stops the GUI but doesn't automatically undo an
+  active kill switch or stop Tor — use the Tor tab's *Stop FULL
+  anonymity mode* button (or the CLI's `--stop`) before closing if you
+  want networking reverted.
+
 ## Safety notes
 
 - Test the kill switch and portscan-block against a target you
