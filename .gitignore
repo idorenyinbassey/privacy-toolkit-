@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.enc
+.privacyguard_state.json
+/etc/redsocks.conf
