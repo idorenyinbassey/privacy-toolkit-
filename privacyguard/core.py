@@ -61,6 +61,39 @@ def randomize_hostname(env: envmod.Environment) -> None:
             print(f"[!] Failed to set hostname: {e}")
 
 
+def block_ipv6(env: envmod.Environment) -> None:
+    """AnonSurf-style IPv6 leak protection: IPv6 has historically been
+    able to leak around IPv4-only iptables kill switches, and can also
+    carry a permanent MAC-derived address. Block it outright while a
+    kill switch is active."""
+    if env.termux or not env.root or not env.has_ip6tables:
+        print("[!] IPv6 blocking needs root + ip6tables (full Linux only) — skipped.")
+        return
+    try:
+        subprocess.run(["ip6tables", "-F"], check=True)
+        subprocess.run(["ip6tables", "-P", "INPUT", "DROP"], check=True)
+        subprocess.run(["ip6tables", "-P", "OUTPUT", "DROP"], check=True)
+        subprocess.run(["ip6tables", "-P", "FORWARD", "DROP"], check=True)
+        subprocess.run(["ip6tables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"], check=True)
+        subprocess.run(["ip6tables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"], check=True)
+        print("[+] IPv6 blocked (prevents IPv6 traffic leaking around the IPv4-only kill switch).")
+    except subprocess.CalledProcessError as e:
+        print(f"[!] Failed to block IPv6: {e}")
+
+
+def unblock_ipv6(env: envmod.Environment) -> None:
+    if env.termux or not env.root or not env.has_ip6tables:
+        return
+    try:
+        subprocess.run(["ip6tables", "-F"], check=True)
+        subprocess.run(["ip6tables", "-P", "INPUT", "ACCEPT"], check=True)
+        subprocess.run(["ip6tables", "-P", "OUTPUT", "ACCEPT"], check=True)
+        subprocess.run(["ip6tables", "-P", "FORWARD", "ACCEPT"], check=True)
+        print("[+] IPv6 traffic restored to normal.")
+    except subprocess.CalledProcessError as e:
+        print(f"[!] Failed to restore IPv6: {e}")
+
+
 def enable_kill_switch(env: envmod.Environment) -> None:
     if env.termux:
         print("[!] Kill switch needs iptables — unavailable in Termux. Use Orbot VPN mode instead.")
@@ -88,6 +121,7 @@ def enable_kill_switch(env: envmod.Environment) -> None:
             ok = False
     if ok:
         print("[+] Kill switch active — only loopback + Tor traffic allowed out.")
+    block_ipv6(env)
 
 
 def disable_kill_switch(env: envmod.Environment) -> None:
@@ -99,6 +133,7 @@ def disable_kill_switch(env: envmod.Environment) -> None:
         print("[+] iptables flushed — normal routing restored.")
     except subprocess.CalledProcessError as e:
         print(f"[!] Failed to flush iptables: {e}")
+    unblock_ipv6(env)
 
 
 CLEANUP_TARGETS_LINUX = ["~/.bash_history", "~/.zsh_history", "~/.python_history", "~/.wget-hsts", "~/.lesshst"]

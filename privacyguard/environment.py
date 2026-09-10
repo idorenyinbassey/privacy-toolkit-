@@ -43,12 +43,18 @@ class Environment:
     has_torsocks: bool
     has_macchanger: bool
     has_iptables: bool
+    has_ip6tables: bool
     has_sysctl: bool
+    has_systemctl: bool
+    has_sdmem: bool
     has_vboxmanage: bool
     has_virsh: bool
     has_scapy: bool
     has_stem: bool
     has_cryptography: bool
+    has_ip6tables: bool
+    has_sdmem: bool
+    has_systemd: bool
     interfaces: list = field(default_factory=list)
 
     def summary(self) -> str:
@@ -62,12 +68,18 @@ class Environment:
             ("torsocks", "yes" if self.has_torsocks else "no"),
             ("macchanger", "yes" if self.has_macchanger else "no"),
             ("iptables", "yes" if self.has_iptables else "no"),
+            ("ip6tables", "yes" if self.has_ip6tables else "no"),
             ("sysctl", "yes" if self.has_sysctl else "no"),
+            ("systemctl", "yes" if self.has_systemctl else "no"),
+            ("sdmem (secure-delete)", "yes" if self.has_sdmem else "no"),
             ("VBoxManage", "yes" if self.has_vboxmanage else "no"),
             ("virsh (libvirt)", "yes" if self.has_virsh else "no"),
             ("scapy (python)", "yes" if self.has_scapy else "no"),
             ("stem (python)", "yes" if self.has_stem else "no"),
             ("cryptography (python)", "yes" if self.has_cryptography else "no"),
+            ("ip6tables", "yes" if self.has_ip6tables else "no"),
+            ("sdmem (secure-delete)", "yes" if self.has_sdmem else "no"),
+            ("systemd", "yes" if self.has_systemd else "no"),
             ("Interfaces", ", ".join(self.interfaces) or "none detected"),
         ]
         width = max(len(r[0]) for r in rows)
@@ -111,7 +123,10 @@ def detect_environment() -> Environment:
         has_torsocks=have("torsocks"),
         has_macchanger=have("macchanger"),
         has_iptables=have("iptables"),
+        has_ip6tables=have("ip6tables"),
         has_sysctl=have("sysctl"),
+        has_systemctl=have("systemctl"),
+        has_sdmem=have("sdmem"),
         has_vboxmanage=have("VBoxManage"),
         has_virsh=have("virsh"),
         has_scapy=have_module("scapy"),

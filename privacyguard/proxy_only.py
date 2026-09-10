@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 from . import environment as envmod
+from . import core as coremod
 
 REDSOCKS_CONF = Path("/etc/redsocks.conf")
 REDSOCKS_LOCAL_PORT = 12345
@@ -86,6 +87,7 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
     if ok:
         print(f"[+] All outbound TCP now routed through {proxy_host}:{proxy_port} — no Tor in the path.")
         print("[!] UDP/DNS is NOT covered by this. Run the DNS leak check next.")
+    coremod.block_ipv6(env)
 
 
 def disable_proxy_kill_switch(env: envmod.Environment) -> None:
@@ -95,4 +97,5 @@ def disable_proxy_kill_switch(env: envmod.Environment) -> None:
     subprocess.run(["iptables", "-t", "nat", "-F", "PG_REDSOCKS"], capture_output=True)
     subprocess.run(["iptables", "-t", "nat", "-X", "PG_REDSOCKS"], capture_output=True)
     subprocess.run(["systemctl", "stop", "redsocks"], capture_output=True)
+    coremod.unblock_ipv6(env)
     print("[+] Proxy-only kill switch disabled.")

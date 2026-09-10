@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from privacyguard import environment as envmod
-from privacyguard import core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check, orchestrate
+from privacyguard import core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check, orchestrate, ram_wipe
 
 
 class ConsoleRedirector:
@@ -312,6 +312,26 @@ class PrivacyGuardGUI(tk.Tk):
         ttk.Label(row3, text="Passphrase:").pack(side="left", padx=(10, 0))
         self.decrypt_pass = ttk.Entry(row3, show="*", width=20); self.decrypt_pass.pack(side="left", padx=4)
         ttk.Button(row3, text="Decrypt & Show", command=self._decrypt_log).pack(side="left", padx=6)
+
+        ttk.Separator(f).pack(fill="x", padx=8, pady=10)
+        ttk.Label(f, text="RAM/app hygiene (ported from AnonSurf's Pandora):").pack(anchor="w", padx=8)
+        row4 = ttk.Frame(f); row4.pack(fill="x", padx=8, pady=4)
+        ttk.Button(row4, text="Kill risky apps now (browsers/chat clients)",
+                   command=lambda: self._run_bg(ram_wipe.kill_risky_apps, self.env)).pack(side="left")
+
+        row5 = ttk.Frame(f); row5.pack(fill="x", padx=8, pady=4)
+        ttk.Label(row5, text="RAM wipe mode:").pack(side="left")
+        self.ram_mode_var = tk.StringVar(value="fast")
+        ttk.Combobox(row5, textvariable=self.ram_mode_var, values=["fast", "thorough"],
+                     width=10, state="readonly").pack(side="left", padx=4)
+        ttk.Button(row5, text="Wipe Free RAM Now",
+                   command=lambda: self._run_bg(ram_wipe.wipe_free_ram, self.env, self.ram_mode_var.get())).pack(side="left", padx=6)
+        ttk.Button(row5, text="Install Shutdown Hook",
+                   command=lambda: self._run_bg(ram_wipe.install_shutdown_hook, self.env, self.ram_mode_var.get())).pack(side="left", padx=6)
+        ttk.Button(row5, text="Remove Shutdown Hook",
+                   command=lambda: self._run_bg(ram_wipe.remove_shutdown_hook, self.env)).pack(side="left")
+        ttk.Label(f, text="Needs `secure-delete` (sdmem) installed for a real overwrite — otherwise this only drops caches.",
+                  foreground="#a05a00").pack(anchor="w", padx=8, pady=(2, 8))
 
     def _save_log(self):
         pw = self.save_pass.get()

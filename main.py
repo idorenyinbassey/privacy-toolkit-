@@ -9,7 +9,7 @@ implemented (raw IP spoofing).
 import argparse
 
 from privacyguard import environment as envmod
-from privacyguard import core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check, orchestrate
+from privacyguard import core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check, orchestrate, ram_wipe
 
 LOGGER = crypto_log.EncryptedLogger()
 
@@ -37,6 +37,9 @@ def menu(env: envmod.Environment) -> None:
         print("17) Start FULL anonymity mode (Tor path)")
         print("18) Stop FULL anonymity mode")
         print("19) Launch GUI")
+        print("20) Kill risky apps now (browsers/chat clients)")
+        print("21) Wipe free RAM now (sdmem)")
+        print("22) Install / remove automatic RAM-wipe-on-shutdown hook")
         print(" 0) Exit")
         c = input("> ").strip()
 
@@ -132,9 +135,26 @@ def menu(env: envmod.Environment) -> None:
         elif c == "17":
             orchestrate.full_start(env)
         elif c == "18":
-            orchestrate.full_stop(env)
+            kill_apps = input("also kill risky apps (browsers/chat clients)? [y/N]: ").strip().lower() == "y"
+            wipe = input("also wipe free RAM now? [y/N]: ").strip().lower() == "y"
+            mode = "fast"
+            if wipe:
+                mode = input("wipe mode [fast/thorough] (default fast): ").strip() or "fast"
+            orchestrate.full_stop(env, kill_risky_apps=kill_apps, wipe_ram=wipe, ram_wipe_mode=mode)
         elif c == "19":
             launch_gui()
+        elif c == "20":
+            ram_wipe.kill_risky_apps(env)
+        elif c == "21":
+            mode = input("wipe mode [fast/thorough] (default fast): ").strip() or "fast"
+            ram_wipe.wipe_free_ram(env, mode=mode)
+        elif c == "22":
+            action = input("install or remove the automatic shutdown hook? [install/remove]: ").strip()
+            if action == "install":
+                mode = input("wipe mode [fast/thorough] (default fast): ").strip() or "fast"
+                ram_wipe.install_shutdown_hook(env, mode=mode)
+            else:
+                ram_wipe.remove_shutdown_hook(env)
         elif c == "0":
             break
         else:
@@ -160,6 +180,12 @@ def main():
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--rotate-ip", action="store_true", help="Rotate Tor circuit (new exit IP)")
     parser.add_argument("--gui", action="store_true", help="Launch the desktop GUI (full Linux VM/standalone only)")
+    parser.add_argument("--kill-risky-apps", action="store_true", help="Kill running browsers/chat clients")
+    parser.add_argument("--wipe-ram", action="store_true", help="Overwrite free RAM now (sdmem if installed)")
+    parser.add_argument("--wipe-ram-mode", choices=["fast", "thorough"], default="fast")
+    parser.add_argument("--install-ram-wipe-hook", action="store_true",
+                         help="Register a systemd hook to wipe RAM on every shutdown/reboot")
+    parser.add_argument("--remove-ram-wipe-hook", action="store_true")
     args = parser.parse_args()
 
     env = envmod.detect_environment()
@@ -179,6 +205,14 @@ def main():
         core.clean_traces(env)
     elif args.rotate_ip:
         proxy_tor.rotate_tor_circuit(env)
+    elif args.kill_risky_apps:
+        ram_wipe.kill_risky_apps(env)
+    elif args.wipe_ram:
+        ram_wipe.wipe_free_ram(env, mode=args.wipe_ram_mode)
+    elif args.install_ram_wipe_hook:
+        ram_wipe.install_shutdown_hook(env, mode=args.wipe_ram_mode)
+    elif args.remove_ram_wipe_hook:
+        ram_wipe.remove_shutdown_hook(env)
     else:
         menu(env)
 

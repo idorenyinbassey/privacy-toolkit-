@@ -17,6 +17,7 @@ privacyguard/
   dns_check.py     - DNS leak detection
   vm_snapshot.py   - VirtualBox/libvirt snapshot reset (run from host)
   crypto_log.py    - encrypted local session log
+  ram_wipe.py      - kill risky apps + overwrite free RAM (ported from AnonSurf's Pandora)
   orchestrate.py   - shared "full start/stop" logic used by both CLI and GUI
 main.py            - CLI (interactive menu + flags)
 gui.py             - Tkinter desktop GUI (full Linux VM/standalone; not Termux)
@@ -110,6 +111,34 @@ VM Snapshots, and Cleanup/Logs, with a live console pane. Intended for
 a full Linux desktop — a VM or standalone install with a display — not
 Termux, which has no GUI by default.
 
+**IPv6 leak blocking**, ported from AnonSurf. IPv6 has historically
+been able to leak around IPv4-only iptables kill switches (and IPv6
+addresses can embed a NIC's permanent MAC). Both the Tor kill switch
+(`core.enable_kill_switch`) and the proxy-only kill switch
+(`proxy_only.enable_proxy_kill_switch`) now also block all IPv6
+traffic via `ip6tables` while active, and restore it automatically
+when disabled. Full Linux + root only.
+
+**RAM/app hygiene**, ported from AnonSurf's companion tool Pandora
+(`ram_wipe.py`):
+- `kill_risky_apps()` closes common browsers/chat clients that tend to
+  hold sensitive data in memory (open tabs, session tokens, chat
+  history) — same idea as AnonSurf's "kill dangerous applications"
+  step, but run on-demand rather than forced on every start.
+- `wipe_free_ram()` uses `sdmem` (from the `secure-delete` package) to
+  overwrite unused RAM, defending against cold-boot/RAM-remnant
+  attacks. Without `sdmem` installed it falls back to a plain cache
+  drop and says so explicitly — that fallback is NOT a secure wipe.
+- `install_shutdown_hook()` registers a systemd unit so the wipe runs
+  automatically on every shutdown/reboot, mirroring Pandora's
+  automatic behavior — opt-in here rather than forced. `fast` mode is
+  a single low-priority pass (seconds); `thorough` uses sdmem's
+  default multi-pass overwrite (can take minutes on large RAM and
+  delays shutdown accordingly).
+All of the above are also reachable as optional add-ons when stopping
+full anonymity mode (CLI menu option 18, or `--stop` combined with
+`--kill-risky-apps`/`--wipe-ram`), rather than forced automatically.
+
 ## Install
 
 ```bash
@@ -123,6 +152,9 @@ pip install pysocks stem cryptography
 
 # For proxy-only system-wide routing and GUI (full Linux only)
 sudo apt install redsocks python3-tk dnsutils
+
+# For real RAM overwrite (optional but recommended over the fallback)
+sudo apt install secure-delete
 ```
 
 `cryptography` on Termux sometimes needs a Rust toolchain:
@@ -184,6 +216,9 @@ Env: Kali GNU/Linux | root=True
 17) Start FULL anonymity mode (Tor path)
 18) Stop FULL anonymity mode
 19) Launch GUI
+20) Kill risky apps now (browsers/chat clients)
+21) Wipe free RAM now (sdmem)
+22) Install / remove automatic RAM-wipe-on-shutdown hook
  0) Exit
 >
 ```
@@ -212,7 +247,15 @@ empty line to finish and continue.
 Option 13 (proxy-only kill switch) asks for the proxy host, port, and
 type (`socks5`/`socks4`/`http-connect`) — use this instead of 17 when
 the target network is known to block Tor traffic. Follow it with
-option 2 to confirm no DNS leak.
+option 2 to confirm no DNS leak. Both kill switches (13 and the Tor
+one via 6/17) also block IPv6 automatically while active.
+
+Option 18 (stop full anonymity mode) will ask whether to also kill
+risky apps and/or wipe free RAM before reverting networking — say `y`
+if you want that cleanup now rather than as a separate step via 20/21.
+Option 22 installs or removes a systemd hook so RAM wipes automatically
+on every shutdown/reboot, independent of whether PrivacyGuard is
+running at the time.
 
 ## User Manual — GUI (`gui.py`)
 
@@ -265,7 +308,13 @@ real time, same text you'd see in the CLI.
   "also wipe /var/log" checkbox), plus save/decrypt for the encrypted
   session log: enter a passphrase and *Save Encrypted Log*, or browse
   to a `.enc` file, enter its passphrase, and *Decrypt & Show* to read
-  it back in the console pane.
+  it back in the console pane. Below that, RAM/app hygiene ported from
+  AnonSurf's Pandora: *Kill risky apps now* closes common browsers/chat
+  clients on demand; a mode dropdown (fast/thorough) plus *Wipe Free
+  RAM Now*, *Install Shutdown Hook*, and *Remove Shutdown Hook* control
+  the `sdmem`-based RAM overwrite, one-off or automatic on every
+  shutdown. A note flags when `sdmem` isn't installed, since the
+  fallback (a cache drop) isn't a real security wipe.
 
 ### Notes on GUI behavior
 

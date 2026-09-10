@@ -1,6 +1,6 @@
 """High-level orchestration shared by the CLI (main.py) and the GUI (gui.py)."""
 from . import environment as envmod
-from . import core, proxy_tor, anti_recon, dns_check
+from . import core, proxy_tor, anti_recon, dns_check, ram_wipe
 
 
 def leak_report(env: envmod.Environment) -> None:
@@ -31,11 +31,16 @@ def full_start(env: envmod.Environment) -> None:
     print("=== Done. Run a leak report + DNS leak check to verify. ===")
 
 
-def full_stop(env: envmod.Environment) -> None:
+def full_stop(env: envmod.Environment, kill_risky_apps: bool = False, wipe_ram: bool = False,
+              ram_wipe_mode: str = "fast") -> None:
     print("=== Stopping anonymity mode ===")
     if not env.termux:
         core.disable_kill_switch(env)
         anti_recon.disable_portscan_protection(env)
         anti_recon.disable_stealth_sysctls(env)
     proxy_tor.stop_tor(env)
+    if kill_risky_apps:
+        ram_wipe.kill_risky_apps(env)
+    if wipe_ram:
+        ram_wipe.wipe_free_ram(env, mode=ram_wipe_mode)
     print("=== Reverted to normal networking. ===")
