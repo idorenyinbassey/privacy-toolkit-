@@ -5,6 +5,8 @@ __pycache__/
 /etc/redsocks.conf
 .pytest_cache/
 *.egg-info/
+build/
+dist/
 .privacyguard_backups/
 .privacyguard_profiles/
 .privacyguard_logs/

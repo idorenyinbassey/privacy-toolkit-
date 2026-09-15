@@ -34,6 +34,15 @@ tests/             - pytest suite (37 tests, no root/network needed to run)
 pyproject.toml, requirements.txt - packaging
 ```
 
+Packaging note: `main.py`/`gui.py` install as top-level modules
+(`main`, `gui`) rather than submodules of the `privacyguard` package —
+confirmed working correctly under `pipx install` (each app gets its
+own isolated venv, so the generic names can't collide with anything
+else). This would only matter if you ever `pip install` this into a
+*shared* environment alongside another tool that also ships a
+top-level `main.py` — not a concern for the documented pipx/venv
+workflows below.
+
 Run the test suite with `pytest tests/` — no root or real network needed;
 subprocess/network calls are mocked. `python3 main.py --version` prints
 the installed version.
@@ -42,7 +51,9 @@ Run the CLI with `python3 main.py` (menu) or flags: `--status --start
 --stop --clean --rotate-ip --dns-leak-check --state --verify --gui`.
 Run the GUI directly with `python3 gui.py` (needs a display — a VM or
 standalone Linux desktop, not Termux's CLI-only environment; Debian/
-Kali may need `sudo apt install python3-tk` first).
+Kali may need `sudo apt install python3-tk` first). If installed via
+pipx (see Install below), the equivalent commands are `privacyguard`
+and `privacyguard-gui` from anywhere, no `python3`/path needed.
 
 ## Answers to specific capability questions
 
@@ -275,6 +286,52 @@ full anonymity mode (CLI menu option 18, or `--stop` combined with
 
 ## Install
 
+### Option A — pipx (recommended for full Linux/Kali)
+
+Tested and confirmed working: `pipx install .` and `pipx install
+".[full]"` both correctly install `privacyguard` and `privacyguard-gui`
+as isolated, globally-available commands — no `--break-system-packages`,
+no risk of PrivacyGuard's dependencies conflicting with anything else
+on the system, and clean removal with one command.
+
+```bash
+sudo apt install pipx tor obfs4proxy macchanger iptables proxychains4 torsocks redsocks secure-delete
+pipx ensurepath   # adds pipx's bin dir to PATH, one-time
+
+git clone https://github.com/idorenyinbassey/privacy-toolkit-.git
+cd privacy-toolkit-
+pipx install .            # core only (pysocks)
+pipx install ".[full]"    # + stem, cryptography, scapy (recommended)
+```
+
+Then run it from anywhere as:
+```bash
+privacyguard          # CLI menu
+privacyguard --status
+privacyguard-gui       # desktop GUI
+```
+
+**GUI + pipx note:** install `python3-tk` (`sudo apt install
+python3-tk`) **before** running `pipx install`. pipx's venv is built
+from your system's Python interpreter, and tkinter is a compiled
+extension tied to that interpreter — it isn't a pip package, so `pipx
+install`/`pipx inject` can't add it after the fact. If you installed
+without it, `sudo apt install python3-tk` then `pipx reinstall
+privacyguard` picks it up.
+
+Upgrading or removing:
+```bash
+git pull && pipx install . --force   # upgrade after pulling new commits
+pipx uninstall privacyguard          # clean removal, no leftover files
+```
+
+Termux note: `pip install pipx` works there too (it's pure Python),
+but pipx doesn't change what's possible on Termux — no root/netfilter
+still means no kill switch/MAC spoofing regardless of install method.
+The plain `pip install` route below is simpler for Termux.
+
+### Option B — plain pip / system packages
+
 ```bash
 # Kali / Debian
 sudo apt install tor obfs4proxy macchanger iptables proxychains4 torsocks
@@ -294,6 +351,10 @@ sudo apt install secure-delete
 `cryptography` on Termux sometimes needs a Rust toolchain:
 `pkg install rust clang` before `pip install cryptography` if the
 wheel build fails.
+
+With this option you run it as `python3 main.py` / `python3 gui.py`
+from inside the cloned repo, rather than a global `privacyguard`
+command.
 
 ## Kill switch / portscan-block prerequisites
 
