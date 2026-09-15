@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from privacyguard import core, environment as envmod, state as statemod
+from privacyguard import core, proxy_only, environment as envmod, state as statemod
 
 
 def make_env(**overrides):
@@ -49,6 +49,8 @@ def test_enable_kill_switch_backs_up_before_flushing(tmp_path, monkeypatch):
     monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
     from privacyguard import firewall_backup
     monkeypatch.setattr(firewall_backup, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(core, "_ensure_transparent_proxy_torrc", lambda *a, **kw: False)
+    monkeypatch.setattr(core, "_wait_for_tor_bootstrap", lambda *a, **kw: True)
     env = make_env()
     mock_result = MagicMock(returncode=0, stdout="# fake ruleset\n")
     with patch("subprocess.run", return_value=mock_result) as mock_run:
@@ -82,6 +84,53 @@ def test_kill_switch_noop_on_termux():
         mock_run.assert_not_called()
 
 
+def test_enable_kill_switch_refuses_without_tor_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    env = make_env(has_tor=False)
+    with patch("subprocess.run") as mock_run:
+        core.enable_kill_switch(env)
+        mock_run.assert_not_called()
+
+
+def test_enable_kill_switch_refuses_when_tor_never_bootstraps(tmp_path, monkeypatch):
+    """The actual bug this was written to catch: enabling the kill
+    switch when Tor never comes up used to still apply the DROP-all
+    firewall, killing all internet access with no working path out.
+    It must now refuse instead."""
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(core, "_ensure_transparent_proxy_torrc", lambda *a, **kw: False)
+    monkeypatch.setattr(core, "_wait_for_tor_bootstrap", lambda *a, **kw: False)
+    env = make_env()
+    with patch("subprocess.run") as mock_run:
+        core.enable_kill_switch(env)
+        mock_run.assert_not_called()
+
+
+def test_ensure_transparent_proxy_torrc_writes_fresh_file(tmp_path):
+    torrc = tmp_path / "torrc"
+    changed = core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    assert changed is True
+    content = torrc.read_text()
+    assert "TransPort 127.0.0.1:9040" in content
+    assert "DNSPort 127.0.0.1:5353" in content
+
+
+def test_ensure_transparent_proxy_torrc_idempotent_no_change(tmp_path):
+    torrc = tmp_path / "torrc"
+    core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    changed_again = core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    assert changed_again is False  # already correct, no rewrite/restart needed
+
+
+def test_ensure_transparent_proxy_torrc_preserves_other_content(tmp_path):
+    torrc = tmp_path / "torrc"
+    torrc.write_text("SocksPort 9050\nLog notice file /var/log/tor/notices.log\n")
+    core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    content = torrc.read_text()
+    assert "SocksPort 9050" in content
+    assert "TransPort 127.0.0.1:9040" in content
+
+
 def test_block_ipv6_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
     statemod.update(ipv6_blocked=True)
@@ -98,3 +147,31 @@ def test_block_ipv6_sets_state_on_success(tmp_path, monkeypatch):
     with patch("subprocess.run", return_value=mock_result):
         core.block_ipv6(env)
     assert statemod.get("ipv6_blocked") is True
+
+
+def test_proxy_only_refuses_when_proxy_unreachable(tmp_path, monkeypatch):
+    """Same failure mode as the Tor kill switch: redirecting to an
+    unreachable proxy used to still apply the firewall, dropping all
+    internet access. Must refuse instead."""
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    env = make_env()
+    with patch.object(envmod, "have", return_value=True), \
+         patch.object(proxy_only, "_proxy_reachable", return_value=False), \
+         patch("subprocess.run") as mock_run:
+        proxy_only.enable_proxy_kill_switch(env, "203.0.113.9", 1080)
+        mock_run.assert_not_called()
+
+
+def test_proxy_only_proceeds_when_proxy_reachable(tmp_path, monkeypatch):
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    from privacyguard import firewall_backup
+    monkeypatch.setattr(firewall_backup, "BACKUP_DIR", tmp_path / "backups")
+    env = make_env()
+    mock_result = MagicMock(returncode=0, stdout="# fake\n")
+    with patch.object(envmod, "have", return_value=True), \
+         patch.object(proxy_only, "_proxy_reachable", return_value=True), \
+         patch.object(proxy_only, "generate_redsocks_conf"), \
+         patch("subprocess.run", return_value=mock_result) as mock_run:
+        proxy_only.enable_proxy_kill_switch(env, "203.0.113.9", 1080)
+        assert mock_run.called  # proceeded past the reachability check
+    assert statemod.get("proxy_only_kill_switch") is True

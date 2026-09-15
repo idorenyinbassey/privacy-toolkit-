@@ -17,6 +17,7 @@ backs up the nat table before flushing it and restores that exact
 backup on disable, and supports proxy authentication (redsocks'
 login/password fields for socks5 and http-connect).
 """
+import socket
 import subprocess
 from pathlib import Path
 
@@ -60,6 +61,14 @@ redsocks {{
     print(f"[+] Wrote {REDSOCKS_CONF} -> {proxy_host}:{proxy_port} ({proxy_type}){auth_note}")
 
 
+def _proxy_reachable(host: str, port: int, timeout: float = 5.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_port: int,
                               proxy_type: str = "socks5", username: str = None, password: str = None,
                               force: bool = False) -> None:
@@ -72,6 +81,15 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
         return
     if not envmod.have("redsocks"):
         print("[!] redsocks not installed. sudo apt install redsocks")
+        return
+
+    # Fix the same failure mode as the Tor kill switch: redirecting all
+    # traffic to a proxy that isn't actually reachable = total internet
+    # loss with no path out. Verify BEFORE touching iptables.
+    if not _proxy_reachable(proxy_host, proxy_port):
+        print(f"[!] Could not reach {proxy_host}:{proxy_port} — NOT enabling the kill switch. "
+              f"Doing so now would drop all internet access with no working proxy path to replace it.")
+        print("    Double-check the host/port/credentials and that the proxy is actually up.")
         return
 
     st = statemod.load()

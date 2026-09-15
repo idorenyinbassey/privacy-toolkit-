@@ -5,6 +5,11 @@ automation while running Kali (or any Linux) on a VM, in Termux, or
 standalone. For authorized pentesting/red-team work and your own
 systems' OPSEC hardening only.
 
+**New here? Start with the [wiki](docs/README.md)** — task-oriented
+guides (Quick Start, Recommended Configurations, Persistent Logs &
+RAM Wipe, Troubleshooting) rather than the full feature-by-feature
+reference below.
+
 ## Layout
 
 ```
@@ -31,6 +36,7 @@ privacyguard/
 main.py            - CLI (interactive menu + flags)
 gui.py             - Tkinter desktop GUI (full Linux VM/standalone; not Termux)
 tests/             - pytest suite (37 tests, no root/network needed to run)
+docs/              - task-oriented wiki (start here if you're new)
 pyproject.toml, requirements.txt - packaging
 ```
 

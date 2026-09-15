@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.2.1 — Fix the actual "enabled kill switch, lost internet" bug + wiki
+
+**Root cause fix:** `enable_kill_switch` and `enable_proxy_kill_switch`
+previously applied their DROP-everything-except-tunnel firewall rules
+unconditionally, trusting that Tor/the proxy was already reachable.
+Kali's default Tor config has no `TransPort`/`DNSPort` configured out
+of the box — enabling the kill switch against that default silently
+redirected all traffic into ports nothing was listening on, dropping
+all internet access with no working path out. Both functions now:
+- Auto-configure the required torrc lines (idempotent managed block,
+  same pattern as gateway.py) and restart Tor if changed.
+- Actively wait for Tor to bootstrap (up to `bootstrap_timeout`
+  seconds, default 30) — or, for the proxy-only switch, confirm the
+  proxy is actually reachable via a real TCP connection attempt —
+  BEFORE touching iptables.
+- Refuse to apply the firewall at all if that check fails, printing
+  what to check next, instead of leaving the system locked out.
+- New tests: `test_enable_kill_switch_refuses_when_tor_never_bootstraps`,
+  `test_proxy_only_refuses_when_proxy_unreachable`, plus coverage for
+  the idempotent torrc-writing helper. Suite: 56/56 passing.
+
+**New: `docs/` wiki.** Task-oriented guides linked from the README:
+- `01-quick-start.md` — shortest path to running per environment
+  (Termux / single VM / two-VM gateway), explicitly sequenced to avoid
+  the lockout above.
+- `02-recommended-configs.md` — a decision tree ("what to enable, in
+  what order") for common scenarios, including what NOT to combine.
+- `03-logs-and-ram-wipe.md` — exact steps and file locations for
+  encrypted session logs, saved profiles, and RAM wipe (on-demand and
+  automatic-on-shutdown).
+- `04-troubleshooting.md` — fixes for problems actually encountered
+  while using this tool, including this exact bug's manual recovery
+  commands for anyone on an older version.
+
 ## 2.2.0 — Gateway mode (two-VM Whonix-style architecture)
 
 New: a Tor gateway VM + an isolated workstation VM whose only network

@@ -1,6 +1,7 @@
 """Core anonymity actions: MAC/hostname randomization, Tor kill switch, trace cleanup."""
 import random
 import subprocess
+import time
 from pathlib import Path
 
 from . import environment as envmod
@@ -104,12 +105,72 @@ def unblock_ipv6(env: envmod.Environment) -> None:
         print(f"[!] Failed to restore IPv6: {e}")
 
 
-def enable_kill_switch(env: envmod.Environment, force: bool = False) -> None:
+def _ensure_transparent_proxy_torrc(torrc_path: Path = None) -> bool:
+    """Ensures torrc has TransPort 9040 / DNSPort 5353 — the redirect
+    rules below send traffic to these ports, and if nothing is
+    listening there (the actual bug behind 'enabled kill switch, lost
+    all internet'), every connection just fails silently. Idempotent:
+    returns True only if it changed the file (caller should restart
+    tor), False if it was already correctly configured."""
+    path = torrc_path or Path("/etc/tor/torrc")
+    marker_start = "# --- PrivacyGuard kill switch (managed block) ---"
+    marker_end = "# --- end PrivacyGuard kill switch ---"
+    block_body = "TransPort 127.0.0.1:9040\nDNSPort 127.0.0.1:5353\nAutomapHostsOnResolve 1"
+    block = f"{marker_start}\n{block_body}\n{marker_end}\n"
+
+    try:
+        existing = path.read_text() if path.exists() else ""
+    except PermissionError:
+        print(f"[!] No permission to read {path}.")
+        return False
+
+    if marker_start in existing:
+        current_body = existing.split(marker_start)[1].split(marker_end)[0].strip()
+        if current_body == block_body:
+            return False  # already correctly configured, no restart needed
+        pre, post = existing.split(marker_start)[0], existing.split(marker_end)[-1]
+        new_content = pre + block + post
+    else:
+        new_content = existing.rstrip("\n") + "\n\n" + block
+
+    try:
+        path.write_text(new_content)
+    except PermissionError:
+        print(f"[!] No permission to write {path}.")
+        return False
+    print(f"[+] Configured {path} with TransPort 9040 / DNSPort 5353 — required for the kill switch "
+          f"to actually route anywhere instead of dropping everything.")
+    return True
+
+
+def _wait_for_tor_bootstrap(env: envmod.Environment, timeout: int = 30) -> bool:
+    from . import proxy_tor as _proxy_tor
+    check = _proxy_tor.check_tor_active()
+    if "error" not in check:
+        return True
+    print(f"[*] Tor not yet reachable — starting it and waiting up to {timeout}s to bootstrap...")
+    _proxy_tor.start_tor(env)
+    waited = 0
+    while waited < timeout:
+        time.sleep(2)
+        waited += 2
+        check = _proxy_tor.check_tor_active()
+        if "error" not in check:
+            print(f"[+] Tor bootstrapped and reachable after {waited}s.")
+            return True
+    return False
+
+
+def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_timeout: int = 30) -> None:
     if env.termux:
         print("[!] Kill switch needs iptables — unavailable in Termux. Use Orbot VPN mode instead.")
         return
     if not env.root or not env.has_iptables:
         print("[!] Kill switch requires root + iptables.")
+        return
+    if not env.has_tor:
+        print("[!] Tor isn't installed on this system. Install it first: sudo apt install tor")
+        print("    Enabling the kill switch without Tor would drop all internet access — refusing.")
         return
     st = statemod.load()
     if st["tor_kill_switch"] and not force:
@@ -119,6 +180,23 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False) -> None:
     if st["proxy_only_kill_switch"]:
         print("[!] Proxy-only kill switch is currently active — disable that first "
               "(both rewrite the same OUTPUT chain and will conflict).")
+        return
+
+    # Fix the actual root cause of "enabled kill switch, lost internet":
+    # verify/auto-configure torrc, restart tor if changed, then confirm
+    # Tor is genuinely bootstrapped BEFORE applying any firewall rule.
+    # If it never comes up, we refuse to enable rather than leaving you
+    # stuck with no path out at all.
+    torrc_changed = _ensure_transparent_proxy_torrc()
+    if torrc_changed and envmod.have("systemctl"):
+        print("[*] Restarting tor to apply the updated torrc...")
+        subprocess.run(["systemctl", "restart", "tor"], capture_output=True)
+        time.sleep(2)
+
+    if not _wait_for_tor_bootstrap(env, timeout=bootstrap_timeout):
+        print(f"[!] Tor did not bootstrap within {bootstrap_timeout}s. NOT enabling the kill switch — "
+              f"doing so now would drop all internet access with no working Tor path to replace it.")
+        print("    Check: sudo systemctl status tor   /   sudo journalctl -u tor -n 50")
         return
 
     backups = firewall_backup.backup_rules(env, label="pre-tor-killswitch")
