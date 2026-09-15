@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 
 from . import environment as envmod
+from . import state as statemod
+from . import firewall_backup
 
 TOR_UID_PLACEHOLDER = "debian-tor"
 
@@ -65,9 +67,13 @@ def block_ipv6(env: envmod.Environment) -> None:
     """AnonSurf-style IPv6 leak protection: IPv6 has historically been
     able to leak around IPv4-only iptables kill switches, and can also
     carry a permanent MAC-derived address. Block it outright while a
-    kill switch is active."""
+    kill switch is active. Idempotent — a no-op if already blocked
+    per saved state."""
     if env.termux or not env.root or not env.has_ip6tables:
         print("[!] IPv6 blocking needs root + ip6tables (full Linux only) — skipped.")
+        return
+    if statemod.get("ipv6_blocked"):
+        print("[i] IPv6 already blocked (per saved state) — skipping.")
         return
     try:
         subprocess.run(["ip6tables", "-F"], check=True)
@@ -77,6 +83,7 @@ def block_ipv6(env: envmod.Environment) -> None:
         subprocess.run(["ip6tables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"], check=True)
         subprocess.run(["ip6tables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"], check=True)
         print("[+] IPv6 blocked (prevents IPv6 traffic leaking around the IPv4-only kill switch).")
+        statemod.update(ipv6_blocked=True)
     except subprocess.CalledProcessError as e:
         print(f"[!] Failed to block IPv6: {e}")
 
@@ -84,23 +91,38 @@ def block_ipv6(env: envmod.Environment) -> None:
 def unblock_ipv6(env: envmod.Environment) -> None:
     if env.termux or not env.root or not env.has_ip6tables:
         return
+    if not statemod.get("ipv6_blocked"):
+        return
     try:
         subprocess.run(["ip6tables", "-F"], check=True)
         subprocess.run(["ip6tables", "-P", "INPUT", "ACCEPT"], check=True)
         subprocess.run(["ip6tables", "-P", "OUTPUT", "ACCEPT"], check=True)
         subprocess.run(["ip6tables", "-P", "FORWARD", "ACCEPT"], check=True)
         print("[+] IPv6 traffic restored to normal.")
+        statemod.update(ipv6_blocked=False)
     except subprocess.CalledProcessError as e:
         print(f"[!] Failed to restore IPv6: {e}")
 
 
-def enable_kill_switch(env: envmod.Environment) -> None:
+def enable_kill_switch(env: envmod.Environment, force: bool = False) -> None:
     if env.termux:
         print("[!] Kill switch needs iptables — unavailable in Termux. Use Orbot VPN mode instead.")
         return
     if not env.root or not env.has_iptables:
         print("[!] Kill switch requires root + iptables.")
         return
+    st = statemod.load()
+    if st["tor_kill_switch"] and not force:
+        print("[i] Tor kill switch already active (per saved state). Disable it first, "
+              "or call with force=True to re-apply.")
+        return
+    if st["proxy_only_kill_switch"]:
+        print("[!] Proxy-only kill switch is currently active — disable that first "
+              "(both rewrite the same OUTPUT chain and will conflict).")
+        return
+
+    backups = firewall_backup.backup_rules(env, label="pre-tor-killswitch")
+
     rules = [
         ["iptables", "-F"], ["iptables", "-t", "nat", "-F"],
         ["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
@@ -121,19 +143,25 @@ def enable_kill_switch(env: envmod.Environment) -> None:
             ok = False
     if ok:
         print("[+] Kill switch active — only loopback + Tor traffic allowed out.")
+        statemod.update(tor_kill_switch=True, iptables_backup=backups["ipv4"], ip6tables_backup=backups["ipv6"])
+    else:
+        print("[!] Kill switch application had errors — restoring pre-existing rules rather than "
+              "leaving a half-applied firewall.")
+        firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
+        return
     block_ipv6(env)
 
 
 def disable_kill_switch(env: envmod.Environment) -> None:
     if env.termux or not env.root or not env.has_iptables:
         return
-    try:
-        subprocess.run(["iptables", "-F"], check=True)
-        subprocess.run(["iptables", "-t", "nat", "-F"], check=True)
-        print("[+] iptables flushed — normal routing restored.")
-    except subprocess.CalledProcessError as e:
-        print(f"[!] Failed to flush iptables: {e}")
-    unblock_ipv6(env)
+    st = statemod.load()
+    if not st["tor_kill_switch"]:
+        print("[i] Tor kill switch not marked active (per saved state) — nothing to disable.")
+        return
+    firewall_backup.restore_rules(env, st.get("iptables_backup"), st.get("ip6tables_backup"))
+    statemod.update(tor_kill_switch=False, ipv6_blocked=False, iptables_backup=None, ip6tables_backup=None)
+    print("[+] Kill switch disabled, prior firewall state restored.")
 
 
 CLEANUP_TARGETS_LINUX = ["~/.bash_history", "~/.zsh_history", "~/.python_history", "~/.wget-hsts", "~/.lesshst"]

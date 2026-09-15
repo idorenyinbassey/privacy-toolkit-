@@ -10,21 +10,33 @@ systems' OPSEC hardening only.
 ```
 privacyguard/
   environment.py   - detects Termux vs full Linux, root, installed tools
+  state.py         - persistent state tracking (what's actually active right now)
+  firewall_backup.py - iptables/ip6tables backup+restore before any destructive flush
   core.py          - MAC/hostname randomization, Tor kill switch, trace cleanup
   proxy_tor.py     - Tor control, circuit rotation, bridges, proxychains (Tor optional)
-  proxy_only.py    - system-wide routing through a plain proxy, NO Tor (redsocks)
+  proxy_only.py    - system-wide routing through a plain proxy, NO Tor (redsocks, auth supported)
   anti_recon.py    - fingerprint hardening, portscan detection/block, log watch
   dns_check.py     - DNS leak detection
   vm_snapshot.py   - VirtualBox/libvirt snapshot reset (run from host)
   crypto_log.py    - encrypted local session log
   ram_wipe.py      - kill risky apps + overwrite free RAM (ported from AnonSurf's Pandora)
+  verify.py        - actually tests a kill switch works, rather than trusting exit codes
+  vpn.py           - OpenVPN / WireGuard start/stop/status
+  profiles.py      - encrypted saved profiles (proxy lists, bridges)
+  monitor.py       - background leak monitor, periodic re-check during a session
   orchestrate.py   - shared "full start/stop" logic used by both CLI and GUI
 main.py            - CLI (interactive menu + flags)
 gui.py             - Tkinter desktop GUI (full Linux VM/standalone; not Termux)
+tests/             - pytest suite (37 tests, no root/network needed to run)
+pyproject.toml, requirements.txt - packaging
 ```
 
+Run the test suite with `pytest tests/` — no root or real network needed;
+subprocess/network calls are mocked. `python3 main.py --version` prints
+the installed version.
+
 Run the CLI with `python3 main.py` (menu) or flags: `--status --start
---stop --clean --rotate-ip --dns-leak-check --gui`.
+--stop --clean --rotate-ip --dns-leak-check --state --verify --gui`.
 Run the GUI directly with `python3 gui.py` (needs a display — a VM or
 standalone Linux desktop, not Termux's CLI-only environment; Debian/
 Kali may need `sudo apt install python3-tk` first).
@@ -83,6 +95,31 @@ What actually changes your visible IP, and what's implemented instead:
   proxy from your list per connection.
 - Swapping which VPN/proxy provider you're connected to, which is a
   manual choice outside what a script should automate for you.
+
+## Production hardening (2.1.0)
+
+See CHANGELOG.md for the full list. Highlights:
+
+- **Idempotent, state-tracked, backed-up.** Every enable/disable
+  (Tor kill switch, proxy-only kill switch, IPv6 block, portscan
+  protection, fingerprint sysctls) now checks `state.py` before
+  acting — running enable twice is a safe no-op, not a duplicated
+  ruleset. Before any destructive `iptables -F`, the current rules are
+  backed up (`firewall_backup.py`) and restored exactly on disable,
+  instead of flushing to a guessed-at default.
+- **Actually verified, not just "the command returned 0."** `verify.py`
+  tests a kill switch by attempting a real direct connection (should
+  fail) and confirming the tunneled path works — run automatically
+  after `full_start`, or on demand (CLI menu 24 / GUI "Verify" buttons).
+- **Tested.** `tests/` — 37 pytest tests covering config generation,
+  state persistence, and idempotency/backup-ordering with mocked
+  subprocess calls. Run with `pytest tests/`; no root needed.
+- **VPN chaining, saved profiles, continuous monitoring.** `vpn.py`
+  (OpenVPN/WireGuard), `profiles.py` (encrypted saved proxy
+  lists/bridges), `monitor.py` (background periodic leak re-check
+  during a session, not just on-demand).
+- **Proxy authentication** — username/password support in the
+  proxy-only redsocks config.
 
 ## New in this version
 

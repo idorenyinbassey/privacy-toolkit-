@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privacyguard"
+version = "2.1.0"
+description = "Environment-aware privacy/anonymity and anti-recon automation for authorized pentesting"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "For authorized pentesting and personal OPSEC use only" }
+authors = [{ name = "Idorenyin" }]
+
+dependencies = [
+    "pysocks",
+]
+
+[project.optional-dependencies]
+full = [
+    "stem",
+    "cryptography",
+    "scapy",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+privacyguard = "main:main"
+privacyguard-gui = "gui:launch"
+
+[tool.setuptools]
+py-modules = ["main", "gui"]
+packages = ["privacyguard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

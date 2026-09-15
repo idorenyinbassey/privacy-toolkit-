@@ -8,10 +8,13 @@ implemented (raw IP spoofing).
 """
 import argparse
 
+from privacyguard import __version__
 from privacyguard import environment as envmod
-from privacyguard import core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check, orchestrate, ram_wipe
+from privacyguard import (core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log,
+                           dns_check, orchestrate, ram_wipe, state as statemod, verify, vpn, profiles, monitor)
 
 LOGGER = crypto_log.EncryptedLogger()
+_monitor_handle = {"instance": None}
 
 
 def menu(env: envmod.Environment) -> None:
@@ -29,17 +32,22 @@ def menu(env: envmod.Environment) -> None:
         print(" 9) Anti-recon: live scan watch (scapy, full Linux)")
         print("10) Anti-recon: watch HTTP access log (Termux-friendly)")
         print("11) Configure Tor bridges (Tor blocked on this network)")
-        print("12) Generate/test proxychains config (Tor optional)")
-        print("13) Proxy-only system-wide kill switch, NO Tor (redsocks)")
+        print("12) Generate/test proxychains config (Tor optional, auth supported)")
+        print("13) Proxy-only system-wide kill switch, NO Tor (redsocks, auth supported)")
         print("14) VM snapshot reset (VirtualBox/virsh, run from host)")
         print("15) Clean local traces")
         print("16) Save / decrypt encrypted session log")
-        print("17) Start FULL anonymity mode (Tor path)")
+        print("17) Start FULL anonymity mode (Tor path, self-verifying)")
         print("18) Stop FULL anonymity mode")
         print("19) Launch GUI")
         print("20) Kill risky apps now (browsers/chat clients)")
         print("21) Wipe free RAM now (sdmem)")
         print("22) Install / remove automatic RAM-wipe-on-shutdown hook")
+        print("23) Show current state (what's actually active right now)")
+        print("24) Verify active kill switch (real test, not just 'command succeeded')")
+        print("25) VPN: start/stop OpenVPN or WireGuard")
+        print("26) Save / load / list encrypted profile (proxy list, bridges, etc.)")
+        print("27) Start / stop continuous leak monitor")
         print(" 0) Exit")
         c = input("> ").strip()
 
@@ -86,7 +94,8 @@ def menu(env: envmod.Environment) -> None:
             proxy_tor.configure_bridges(env, lines)
         elif c == "12":
             proxies = []
-            print("Paste proxy lines (e.g. 'socks5 203.0.113.5 1080'), empty line to finish:")
+            print("Paste proxy lines (e.g. 'socks5 203.0.113.5 1080' or 'socks5 203.0.113.5 1080 user pass'),")
+            print("empty line to finish:")
             while True:
                 l = input()
                 if not l:
@@ -103,7 +112,11 @@ def menu(env: envmod.Environment) -> None:
                 host = input("proxy host/IP: ").strip()
                 port = int(input("proxy port: ").strip())
                 ptype = input("proxy type [socks5/socks4/http-connect] (default socks5): ").strip() or "socks5"
-                proxy_only.enable_proxy_kill_switch(env, host, port, ptype)
+                user = input("username (leave blank if none): ").strip() or None
+                pw = input("password (leave blank if none): ").strip() or None
+                proxy_only.enable_proxy_kill_switch(env, host, port, ptype, username=user, password=pw)
+                if input("run verification now? [Y/n]: ").strip().lower() != "n":
+                    verify.verify_proxy_kill_switch(env, host)
             else:
                 proxy_only.disable_proxy_kill_switch(env)
         elif c == "14":
@@ -155,6 +168,78 @@ def menu(env: envmod.Environment) -> None:
                 ram_wipe.install_shutdown_hook(env, mode=mode)
             else:
                 ram_wipe.remove_shutdown_hook(env)
+        elif c == "23":
+            print(statemod.summary())
+        elif c == "24":
+            st = statemod.load()
+            if st["tor_kill_switch"]:
+                verify.verify_tor_kill_switch(env)
+            elif st["proxy_only_kill_switch"]:
+                host = (st.get("active_proxy") or "://").split("://")[-1].split(":")[0]
+                verify.verify_proxy_kill_switch(env, host)
+            else:
+                print("[i] No kill switch marked active per saved state — nothing to verify.")
+            if st["ipv6_blocked"]:
+                verify.verify_ipv6_blocked(env)
+        elif c == "25":
+            kind = input("openvpn or wireguard? [openvpn/wireguard]: ").strip().lower()
+            action = input("start or stop? [start/stop]: ").strip().lower()
+            if kind == "openvpn":
+                if action == "start":
+                    cfg = input("path to .ovpn config: ").strip()
+                    auth = input("path to auth-user-pass file (blank if none): ").strip() or None
+                    vpn.start_openvpn(env, cfg, auth_file=auth)
+                else:
+                    vpn.stop_openvpn(env)
+            elif kind == "wireguard":
+                iface = input("interface name [wg0]: ").strip() or "wg0"
+                (vpn.start_wireguard if action == "start" else vpn.stop_wireguard)(env, iface)
+            else:
+                print("Unknown VPN kind.")
+        elif c == "26":
+            sub = input("save, load, or list? [save/load/list]: ").strip().lower()
+            if sub == "list":
+                names = profiles.list_profiles()
+                print("Saved profiles: " + (", ".join(names) if names else "(none)"))
+            elif sub == "save":
+                name = input("profile name: ").strip()
+                proxies = []
+                print("Proxy lines (empty line to finish):")
+                while True:
+                    l = input()
+                    if not l:
+                        break
+                    proxies.append(l)
+                bridges = []
+                print("Bridge lines (empty line to finish):")
+                while True:
+                    l = input()
+                    if not l:
+                        break
+                    bridges.append(l)
+                pw = input("passphrase to encrypt this profile: ")
+                profiles.save_profile(name, {"proxies": proxies, "bridges": bridges}, pw)
+            elif sub == "load":
+                name = input("profile name: ").strip()
+                pw = input("passphrase: ")
+                try:
+                    data = profiles.load_profile(name, pw)
+                    print(f"Proxies: {data.get('proxies', [])}")
+                    print(f"Bridges: {data.get('bridges', [])}")
+                except Exception as e:
+                    print(f"[!] Load failed: {e}")
+        elif c == "27":
+            action = input("start or stop? [start/stop]: ").strip().lower()
+            if action == "start":
+                interval = input("check interval seconds [30]: ").strip()
+                mon = monitor.LeakMonitor(env, interval=int(interval) if interval else 30)
+                _monitor_handle["instance"] = mon
+                mon.start()
+            else:
+                if _monitor_handle["instance"]:
+                    _monitor_handle["instance"].stop()
+                else:
+                    print("[i] No monitor running in this session.")
         elif c == "0":
             break
         else:
@@ -173,6 +258,7 @@ def launch_gui():
 
 def main():
     parser = argparse.ArgumentParser(description="PrivacyGuard v2")
+    parser.add_argument("--version", action="version", version=f"PrivacyGuard {__version__}")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--dns-leak-check", action="store_true")
     parser.add_argument("--start", action="store_true")
@@ -186,6 +272,8 @@ def main():
     parser.add_argument("--install-ram-wipe-hook", action="store_true",
                          help="Register a systemd hook to wipe RAM on every shutdown/reboot")
     parser.add_argument("--remove-ram-wipe-hook", action="store_true")
+    parser.add_argument("--state", action="store_true", help="Print what's actually active right now")
+    parser.add_argument("--verify", action="store_true", help="Verify the currently active kill switch actually works")
     args = parser.parse_args()
 
     env = envmod.detect_environment()
@@ -197,6 +285,17 @@ def main():
         orchestrate.leak_report(env)
     elif args.dns_leak_check:
         dns_check.print_dns_leak_report(env)
+    elif args.state:
+        print(statemod.summary())
+    elif args.verify:
+        st = statemod.load()
+        if st["tor_kill_switch"]:
+            verify.verify_tor_kill_switch(env)
+        elif st["proxy_only_kill_switch"]:
+            host = (st.get("active_proxy") or "://").split("://")[-1].split(":")[0]
+            verify.verify_proxy_kill_switch(env, host)
+        else:
+            print("[i] No kill switch marked active per saved state — nothing to verify.")
     elif args.start:
         orchestrate.full_start(env)
     elif args.stop:

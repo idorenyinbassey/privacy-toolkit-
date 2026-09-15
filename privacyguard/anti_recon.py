@@ -22,6 +22,7 @@ import time
 from collections import defaultdict, deque
 
 from . import environment as envmod
+from . import state as statemod
 
 
 # --------------------------------------------------------------------
@@ -37,29 +38,44 @@ STEALTH_SYSCTLS = {
 }
 
 
+def _read_sysctl(key: str) -> str:
+    try:
+        out = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+    except Exception:
+        return None
+
+
 def enable_stealth_sysctls(env: envmod.Environment) -> None:
     if env.termux or not env.root or not env.has_sysctl:
         print("[!] Sysctl fingerprint hardening needs root + full Linux — skipped.")
         return
+    if statemod.get("stealth_sysctls"):
+        print("[i] Stealth sysctls already applied (per saved state) — skipping.")
+        return
+    # Record the EXACT previous values so disable restores reality,
+    # not a guessed-at "typical default".
+    previous = {key: _read_sysctl(key) for key in STEALTH_SYSCTLS}
     for key, val in STEALTH_SYSCTLS.items():
         try:
             subprocess.run(["sysctl", "-w", f"{key}={val}"], check=True, capture_output=True)
             print(f"[+] {key} = {val}")
         except subprocess.CalledProcessError as e:
             print(f"[!] Failed to set {key}: {e}")
+    statemod.update(stealth_sysctls=True, stealth_sysctls_backup=previous)
 
 
 def disable_stealth_sysctls(env: envmod.Environment) -> None:
     if env.termux or not env.root or not env.has_sysctl:
         return
-    defaults = {
-        "net.ipv4.icmp_echo_ignore_all": "0",
-        "net.ipv4.tcp_timestamps": "1",
-        "net.ipv4.conf.all.log_martians": "0",
-    }
-    for key, val in defaults.items():
-        subprocess.run(["sysctl", "-w", f"{key}={val}"], check=False, capture_output=True)
-    print("[+] Reverted fingerprint-hardening sysctls to typical defaults.")
+    if not statemod.get("stealth_sysctls"):
+        return
+    previous = statemod.get("stealth_sysctls_backup") or {}
+    for key, val in previous.items():
+        if val is not None:
+            subprocess.run(["sysctl", "-w", f"{key}={val}"], check=False, capture_output=True)
+    statemod.update(stealth_sysctls=False, stealth_sysctls_backup=None)
+    print("[+] Reverted fingerprint-hardening sysctls to their prior values.")
 
 
 # --------------------------------------------------------------------
@@ -68,13 +84,18 @@ def disable_stealth_sysctls(env: envmod.Environment) -> None:
 # --hitcount SYNs within --seconds, it gets logged then dropped.
 # --------------------------------------------------------------------
 
-def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seconds: int = 60) -> None:
+def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seconds: int = 60,
+                                force: bool = False) -> None:
     if env.termux:
         print("[!] No netfilter in Termux — can't block at the firewall level.")
         print("    Use the log-watch option instead for your Termux-hosted services.")
         return
     if not env.root or not env.has_iptables:
         print("[!] Portscan protection needs root + iptables.")
+        return
+    if statemod.get("portscan_protection") and not force:
+        print("[i] Portscan protection already active (per saved state). Disable it first, "
+              "or call with force=True to re-apply with new parameters.")
         return
     cmds = [
         ["iptables", "-N", "PG_PORTSCAN"],
@@ -96,17 +117,26 @@ def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seco
         print(f"[+] Portscan protection active: > {hitcount} new connections from one source "
               f"within {seconds}s gets logged + dropped.")
         print("    Tune hitcount/seconds if legitimate traffic trips it.")
+        statemod.update(portscan_protection=True, portscan_params={"hitcount": hitcount, "seconds": seconds})
 
 
 def disable_portscan_protection(env: envmod.Environment) -> None:
     if env.termux or not env.root or not env.has_iptables:
         return
+    if not statemod.get("portscan_protection"):
+        return
+    # Remove using the EXACT parameters recorded at enable time — a
+    # hardcoded hitcount/seconds here would silently fail to match the
+    # rule if it was enabled with different values.
+    params = statemod.get("portscan_params") or {"hitcount": 15, "seconds": 60}
     subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
-                     "--update", "--seconds", "60", "--hitcount", "15", "-j", "PG_PORTSCAN"], capture_output=True)
+                     "--update", "--seconds", str(params["seconds"]), "--hitcount", str(params["hitcount"]),
+                     "-j", "PG_PORTSCAN"], capture_output=True)
     subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
                      "--set", "-j", "ACCEPT"], capture_output=True)
     subprocess.run(["iptables", "-F", "PG_PORTSCAN"], capture_output=True)
     subprocess.run(["iptables", "-X", "PG_PORTSCAN"], capture_output=True)
+    statemod.update(portscan_protection=False, portscan_params=None)
     print("[+] Portscan protection rules removed.")
 
 

@@ -52,9 +52,6 @@ class Environment:
     has_scapy: bool
     has_stem: bool
     has_cryptography: bool
-    has_ip6tables: bool
-    has_sdmem: bool
-    has_systemd: bool
     interfaces: list = field(default_factory=list)
 
     def summary(self) -> str:
@@ -77,9 +74,6 @@ class Environment:
             ("scapy (python)", "yes" if self.has_scapy else "no"),
             ("stem (python)", "yes" if self.has_stem else "no"),
             ("cryptography (python)", "yes" if self.has_cryptography else "no"),
-            ("ip6tables", "yes" if self.has_ip6tables else "no"),
-            ("sdmem (secure-delete)", "yes" if self.has_sdmem else "no"),
-            ("systemd", "yes" if self.has_systemd else "no"),
             ("Interfaces", ", ".join(self.interfaces) or "none detected"),
         ]
         width = max(len(r[0]) for r in rows)

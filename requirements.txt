@@ -1,0 +1,11 @@
+# Core (works on Termux and full Linux)
+pysocks
+
+# Full feature set (Tor circuit rotation, encrypted logs/profiles, live scan watch)
+stem
+cryptography
+scapy
+
+# Development
+pytest>=7.0
+pyflakes
