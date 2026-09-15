@@ -11,7 +11,8 @@ import argparse
 from privacyguard import __version__
 from privacyguard import environment as envmod
 from privacyguard import (core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log,
-                           dns_check, orchestrate, ram_wipe, state as statemod, verify, vpn, profiles, monitor)
+                           dns_check, orchestrate, ram_wipe, state as statemod, verify, vpn, profiles, monitor,
+                           gateway_topology, gateway, workstation)
 
 LOGGER = crypto_log.EncryptedLogger()
 _monitor_handle = {"instance": None}
@@ -48,6 +49,9 @@ def menu(env: envmod.Environment) -> None:
         print("25) VPN: start/stop OpenVPN or WireGuard")
         print("26) Save / load / list encrypted profile (proxy list, bridges, etc.)")
         print("27) Start / stop continuous leak monitor")
+        print("28) Gateway mode: host-side VM network wiring")
+        print("29) Gateway mode: configure THIS VM as the gateway")
+        print("30) Gateway mode: configure THIS VM as the workstation")
         print(" 0) Exit")
         c = input("> ").strip()
 
@@ -240,6 +244,51 @@ def menu(env: envmod.Environment) -> None:
                     _monitor_handle["instance"].stop()
                 else:
                     print("[i] No monitor running in this session.")
+        elif c == "28":
+            print("Run this on the HOST (not inside either VM) to wire up the isolated internal network.")
+            hv = input("hypervisor [vbox/virsh]: ").strip().lower()
+            gw_vm = input("gateway VM name: ").strip()
+            ws_vm = input("workstation VM name: ").strip()
+            net_name = input(f"internal network name [{gateway_topology.DEFAULT_INTERNAL_NET_NAME}]: ").strip() \
+                or gateway_topology.DEFAULT_INTERNAL_NET_NAME
+            if hv == "vbox":
+                ext = input("gateway's external adapter [nat/bridged] (default nat): ").strip() or "nat"
+                gateway_topology.vbox_wire_gateway(gw_vm, ext, net_name)
+                gateway_topology.vbox_wire_workstation(ws_vm, net_name)
+                if input("verify topology now? [Y/n]: ").strip().lower() != "n":
+                    gateway_topology.vbox_verify_topology(gw_vm, ws_vm)
+            elif hv == "virsh":
+                gateway_topology.virsh_create_isolated_network(net_name)
+                ext_net = input("gateway's external libvirt network [default]: ").strip() or "default"
+                gateway_topology.virsh_wire_gateway(gw_vm, ext_net, net_name)
+                gateway_topology.virsh_wire_workstation(ws_vm, net_name)
+            else:
+                print("Unknown hypervisor.")
+        elif c == "29":
+            action = input("enable or disable? [enable/disable]: ").strip()
+            if action == "enable":
+                iface = input(f"internal interface [{env.interfaces[0] if env.interfaces else 'eth1'}]: ").strip() \
+                    or (env.interfaces[0] if env.interfaces else "eth1")
+                ip = input(f"internal IP [{gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP}]: ").strip() \
+                    or gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP
+                ext_iface = input("external interface (for reference, optional): ").strip() or None
+                gateway.enable_gateway(env, iface, ip, external_iface=ext_iface)
+            else:
+                gateway.disable_gateway(env)
+        elif c == "30":
+            action = input("configure networking or verify isolation? [configure/verify]: ").strip()
+            if action == "configure":
+                iface = input(f"this VM's interface [{env.interfaces[0] if env.interfaces else 'eth0'}]: ").strip() \
+                    or (env.interfaces[0] if env.interfaces else "eth0")
+                static_ip = input(f"this VM's static IP [{gateway_topology.DEFAULT_WORKSTATION_INTERNAL_IP}]: ").strip() \
+                    or gateway_topology.DEFAULT_WORKSTATION_INTERNAL_IP
+                gw_ip = input(f"gateway's internal IP [{gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP}]: ").strip() \
+                    or gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP
+                workstation.configure_networking(env, iface, static_ip, gw_ip)
+            else:
+                gw_ip = input(f"expected gateway IP [{gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP}]: ").strip() \
+                    or gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP
+                workstation.verify_isolation(env, expected_gateway_ip=gw_ip)
         elif c == "0":
             break
         else:

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.2.0 — Gateway mode (two-VM Whonix-style architecture)
+
+New: a Tor gateway VM + an isolated workstation VM whose only network
+adapter connects to an internal-only network shared with the gateway
+— stronger than a single-VM kill switch because the isolation is a
+property of the virtual network topology itself, not just a firewall
+rule a workstation-side compromise could theoretically route around.
+
+- `gateway_topology.py` (host-side) — wires VM network adapters via
+  VBoxManage or virsh: the gateway gets two NICs (external + internal),
+  the workstation gets exactly one (internal only).
+- `gateway.py` (run inside the gateway VM) — configures Tor's
+  TransPort/DNSPort to also bind the internal interface, and sets up
+  PREROUTING REDIRECT rules so the workstation's traffic goes through
+  this VM's local Tor instance. The load-bearing property is an
+  absence: no MASQUERADE or FORWARD-ACCEPT rule is ever issued, and
+  the FORWARD chain default-drops — so anything not caught by the
+  REDIRECT rules goes nowhere instead of reaching the external
+  interface directly. Idempotent, state-tracked, and backed up the
+  same way as the single-machine kill switch.
+- `workstation.py` (run inside the workstation VM) — points its
+  networking at the gateway, and `verify_isolation()` checks reality
+  rather than intent: exactly one non-loopback interface, exactly one
+  default route, DNS pointed only at the gateway.
+- CLI menu items 28–30 (one per machine in the setup) and a new GUI
+  "Gateway Mode" tab with three sub-panels matching the three roles.
+- Tests: `tests/test_gateway_mode.py`, 12 tests including one that
+  specifically asserts no MASQUERADE/FORWARD-ACCEPT rule is ever
+  issued during gateway setup — the actual security property this
+  architecture depends on.
+
 ## 2.1.0 — Production hardening pass
 
 Fixes nine flaws identified in review of 2.0.0, none of which had been

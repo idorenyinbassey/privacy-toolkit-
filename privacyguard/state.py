@@ -33,6 +33,11 @@ DEFAULT_STATE = {
     "nat_iptables_backup": None,
     "active_proxy": None,
     "vpn_active": None,
+    "gateway_mode_active": False,
+    "gateway_iptables_backup": None,
+    "gateway_ip6tables_backup": None,
+    "gateway_config": None,          # {"internal_iface": ..., "internal_ip": ..., "external_iface": ...}
+    "workstation_configured": False,
     "last_updated": None,
 }
 
@@ -76,6 +81,8 @@ def summary() -> str:
         f"RAM-wipe shutdown hook : {'installed' if s['ram_wipe_hook'] else 'not installed'}",
         f"Active proxy           : {s['active_proxy'] or 'none'}",
         f"VPN                    : {s['vpn_active'] or 'none'}",
+        f"Gateway mode (this VM) : {'ACTIVE — this is the Tor gateway VM' if s['gateway_mode_active'] else 'off'}",
+        f"Workstation isolation  : {'configured' if s['workstation_configured'] else 'not configured'}",
         f"Last updated           : {s['last_updated'] or 'never'}",
     ]
     return "\n".join(lines)

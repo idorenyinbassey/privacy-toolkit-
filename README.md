@@ -24,6 +24,9 @@ privacyguard/
   vpn.py           - OpenVPN / WireGuard start/stop/status
   profiles.py      - encrypted saved profiles (proxy lists, bridges)
   monitor.py       - background leak monitor, periodic re-check during a session
+  gateway_topology.py - host-side VM network wiring for two-VM gateway mode
+  gateway.py       - gateway-VM-side transparent Tor proxy for an isolated workstation
+  workstation.py   - workstation-VM-side network config + isolation verification
   orchestrate.py   - shared "full start/stop" logic used by both CLI and GUI
 main.py            - CLI (interactive menu + flags)
 gui.py             - Tkinter desktop GUI (full Linux VM/standalone; not Termux)
@@ -95,6 +98,100 @@ What actually changes your visible IP, and what's implemented instead:
   proxy from your list per connection.
 - Swapping which VPN/proxy provider you're connected to, which is a
   manual choice outside what a script should automate for you.
+
+## Gateway mode — two-VM Whonix-style architecture (2.2.0)
+
+A single VM with a kill switch is protected at the software/firewall
+level. Gateway mode is stronger: a **Tor gateway VM** with the only
+real internet connection, and an **isolated workstation VM** whose
+*only* network adapter connects to an internal-only network shared
+with the gateway. The workstation has no virtual wire to the internet
+at all — not a firewall rule blocking it, an actual absent connection.
+Even a kernel-level compromise on the workstation can't leak your real
+IP, because there's nothing to leak through.
+
+```
+[Internet] -- external NIC -- [Gateway VM] -- internal NIC --+
+                                                               |
+                                    (isolated network,        |
+                                     no route out)             |
+                                                               |
+                                    [Workstation VM] -- NIC ---+
+                                    (this is its ONLY adapter)
+```
+
+New modules: `gateway_topology.py` (host-side — wires the VM network
+adapters via VBoxManage/virsh), `gateway.py` (run inside the gateway
+VM — transparent Tor proxy for the internal network, with **no**
+MASQUERADE/FORWARD-ACCEPT rule ever issued, which is the actual
+mechanism enforcing Tor-only routing), `workstation.py` (run inside
+the workstation VM — points its networking at the gateway, and
+verifies the isolation actually holds: one interface, one route, one
+DNS resolver).
+
+### Setup (three steps, three different machines)
+
+**1. On the HOST** (CLI menu 28, or GUI Gateway Mode tab, section 1):
+create/pick two VMs, both running Kali (or any Linux) — install the OS
+in each normally first, PrivacyGuard doesn't do that part. Then wire
+the topology:
+```
+python3 main.py
+> 28
+hypervisor [vbox/virsh]: vbox
+gateway VM name: kali-gateway
+workstation VM name: kali-workstation
+gateway's external adapter [nat/bridged] (default nat): nat
+```
+This gives the gateway VM two NICs (external + internal) and the
+workstation VM exactly **one** NIC (internal only). Boot both VMs
+after this.
+
+**2. Inside the GATEWAY VM** (CLI menu 29, or GUI Gateway Mode tab,
+section 2): install `tor`, then enable gateway mode:
+```
+python3 main.py
+> 29
+enable or disable? [enable/disable]: enable
+internal interface [eth1]: eth1
+internal IP [10.152.152.10]: 10.152.152.10
+```
+This writes the TransPort/DNSPort bindings into `/etc/tor/torrc`,
+restarts Tor, and sets up the redirect rules. Restart tor manually if
+the tool says to (`sudo systemctl restart tor`).
+
+**3. Inside the WORKSTATION VM** (CLI menu 30, or GUI Gateway Mode
+tab, section 3): point it at the gateway, then verify:
+```
+python3 main.py
+> 30
+configure networking or verify isolation? [configure/verify]: configure
+this VM's interface [eth0]: eth0
+this VM's static IP [10.152.152.11]: 10.152.152.11
+gateway's internal IP [10.152.152.10]: 10.152.152.10
+> 30
+configure networking or verify isolation? [configure/verify]: verify
+expected gateway IP [10.152.152.10]: 10.152.152.10
+```
+The verify step checks reality, not intent: exactly one non-loopback
+interface, exactly one default route, DNS pointed only at the
+gateway. If any of those fail, go recheck the VM's adapter settings on
+the **host** — the isolation is a topology property, not something
+this step can fix from inside the guest.
+
+### What this does and doesn't cover
+
+Covers: the workstation has no software-reachable path to the
+internet except through the gateway's Tor redirect, even with a
+workstation-side compromise, because the FORWARD chain default-drops
+and no MASQUERADE rule ever exists to route it directly.
+
+Doesn't cover: application-layer leaks inside the workstation
+(browser fingerprinting, clipboard sharing if guest tools are
+enabled), Tor's own timing-correlation limitations, or physical/host
+compromise — same caveats as everywhere else in this toolkit, just
+now with one less layer (the network topology itself) that a
+workstation-side bug could undermine.
 
 ## Production hardening (2.1.0)
 
@@ -256,6 +353,14 @@ Env: Kali GNU/Linux | root=True
 20) Kill risky apps now (browsers/chat clients)
 21) Wipe free RAM now (sdmem)
 22) Install / remove automatic RAM-wipe-on-shutdown hook
+23) Show current state (what's actually active right now)
+24) Verify active kill switch (real test, not just "command succeeded")
+25) VPN: start/stop OpenVPN or WireGuard
+26) Save / load / list encrypted profile (proxy list, bridges, etc.)
+27) Start / stop continuous leak monitor
+28) Gateway mode: host-side VM network wiring
+29) Gateway mode: configure THIS VM as the gateway
+30) Gateway mode: configure THIS VM as the workstation
  0) Exit
 >
 ```
@@ -266,8 +371,9 @@ you pick them. A typical session before a scan:
 
 ```
 > 1          # confirm environment/root, note current public IP
-> 17         # start full anonymity mode (Tor, MAC/hostname randomize, kill switch)
+> 17         # start full anonymity mode (Tor, MAC/hostname randomize, kill switch) - self-verifying
 > 2          # then: y  -> DNS leak check, expecting a tunnel to be active
+> 24         # spot-check the kill switch is genuinely blocking direct traffic
 > 9          # optional: watch for scanners touching this box while you work
 ```
 ...and afterward:
@@ -279,13 +385,16 @@ you pick them. A typical session before a scan:
 
 Menu options 11 (bridges) and 12 (proxychains) accept **multi-line
 paste**: type or paste one entry per line, then press Enter on an
-empty line to finish and continue.
+empty line to finish and continue. Option 12 also accepts proxy lines
+with credentials (`socks5 host port user pass`).
 
-Option 13 (proxy-only kill switch) asks for the proxy host, port, and
-type (`socks5`/`socks4`/`http-connect`) — use this instead of 17 when
-the target network is known to block Tor traffic. Follow it with
-option 2 to confirm no DNS leak. Both kill switches (13 and the Tor
-one via 6/17) also block IPv6 automatically while active.
+Option 13 (proxy-only kill switch) asks for the proxy host, port,
+type, and optional username/password — use this instead of 17 when
+the target network is known to block Tor traffic. It offers to run
+verification (option 24's check) right after enabling. Both kill
+switches (13 and the Tor one via 6/17) also block IPv6 automatically
+while active, and both are idempotent — re-running enable while
+already active is a safe no-op rather than a duplicated ruleset.
 
 Option 18 (stop full anonymity mode) will ask whether to also kill
 risky apps and/or wipe free RAM before reverting networking — say `y`
@@ -293,6 +402,17 @@ if you want that cleanup now rather than as a separate step via 20/21.
 Option 22 installs or removes a systemd hook so RAM wipes automatically
 on every shutdown/reboot, independent of whether PrivacyGuard is
 running at the time.
+
+Option 23 prints exactly what's active right now — useful after a
+crash or a new session, since state persists across runs. Option 24
+doesn't just check "is a kill switch marked on" — it attempts a real
+direct connection and confirms it fails, confirms the tunneled path
+works, and checks for DNS leaks.
+
+Options 28–30 are gateway mode — a two-VM architecture stronger than a
+single-VM kill switch. Each option runs on a *different* machine (the
+host, then inside the gateway VM, then inside the workstation VM) —
+see the "Gateway mode" section above for the full walkthrough.
 
 ## User Manual — GUI (`gui.py`)
 
@@ -313,25 +433,34 @@ a black **Console output** pane pinned across the bottom — every
 action's output (successes, errors, leak reports) streams there in
 real time, same text you'd see in the CLI.
 
+A live **status bar** sits above the tabs, reading from `state.py`
+every 2 seconds — Tor kill switch, proxy-only kill switch, IPv6
+blocked, portscan protection, and VPN, each as an on/off dot. This is
+how you tell what's actually active without scrolling the console.
+
 ### Tabs
 
 - **Status** — shows the detected environment (root, distro, which
-  tools are installed) and has buttons for *Refresh Environment* and
-  *Leak Report*. A checkbox ("A kill switch/tunnel is active right
+  tools are installed) and has buttons for *Refresh Environment*,
+  *Leak Report*, and *Show Full State* (the same detail as the status
+  bar, spelled out). A checkbox ("A kill switch/tunnel is active right
   now") plus *Run DNS Leak Check* lives here too — tick it before
   checking if you expect to be tunneled, so the verdict is judged
   correctly.
 - **Tor** — Start/Stop Tor, *Rotate Circuit* for a new exit IP, *Check
-  Tor Active*, enable/disable the Tor kill switch, a text box to paste
-  bridge lines into plus *Configure Bridges*, and buttons to start/stop
-  **full** anonymity mode in one click.
+  Tor Active*, enable/disable the Tor kill switch, a *Verify* button
+  that actually tests it (attempts a direct connection, confirms it
+  fails), a text box to paste bridge lines into plus *Configure
+  Bridges*, and buttons to start/stop **full** anonymity mode in one
+  click (self-verifying by default).
 - **Proxy** — paste proxy lines (one per line) and generate a
   proxychains config, with a **chain mode** dropdown (dynamic/strict/
   random) and an **"Include Tor in chain"** checkbox — leave it
   unticked when the target blocks Tor. Below that, the system-wide
-  proxy-only kill switch: enter host/port/type and enable/disable it
-  (full Linux + root, needs `redsocks`). A note reminds you this is
-  TCP-only — check DNS leaks after.
+  proxy-only kill switch: enter host/port/type plus optional
+  username/password, enable/disable it (full Linux + root, needs
+  `redsocks`), and *Verify* to test it the same way as the Tor tab. A
+  note reminds you this is TCP-only — check DNS leaks after.
 - **Anti-Recon** — toggle fingerprint hardening and portscan
   auto-block; run a bounded-duration live scan watch (set seconds and
   whether to auto-block detected scanners); or point *Watch HTTP
@@ -352,6 +481,27 @@ real time, same text you'd see in the CLI.
   the `sdmem`-based RAM overwrite, one-off or automatic on every
   shutdown. A note flags when `sdmem` isn't installed, since the
   fallback (a cache drop) isn't a real security wipe.
+- **VPN** — start/stop OpenVPN (browse to a `.ovpn` config, optional
+  auth file) or WireGuard (interface name), for chaining a VPN
+  underneath Tor/a proxy. Both need root + full Linux.
+- **Profiles** — save/load an encrypted profile (proxy lines + bridge
+  lines) under a name and passphrase, so you're not retyping them
+  every session; *List Profiles* prints what's saved.
+- **Monitor** — start a background thread that periodically re-checks
+  Tor/DNS/public-IP and prints `[MONITOR ALERT]` lines in the console
+  if something changes unexpectedly mid-session; set the interval and
+  whether to expect a tunnel (for DNS-leak flagging). *Stop Monitor*
+  ends it.
+- **Gateway Mode** — the two-VM architecture (see the dedicated
+  section above for the full walkthrough), laid out as three
+  sub-panels matching the three machines involved: (1) **Host** — pick
+  a hypervisor and both VM names, *Wire Topology* to give the gateway
+  two NICs and the workstation exactly one; (2) **Gateway VM** — enter
+  the internal interface/IP, *Enable/Disable Gateway Mode*; (3)
+  **Workstation VM** — enter its interface/IP and the gateway's IP,
+  *Configure Networking*, then *Verify Isolation* to actually check
+  reality (one interface, one route, one DNS resolver) rather than
+  just trusting the setup.
 
 ### Notes on GUI behavior
 

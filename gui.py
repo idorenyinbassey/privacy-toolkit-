@@ -18,7 +18,8 @@ from tkinter import ttk, filedialog, messagebox
 
 from privacyguard import environment as envmod
 from privacyguard import (core, proxy_tor, proxy_only, anti_recon, vm_snapshot, crypto_log, dns_check,
-                           orchestrate, ram_wipe, state as statemod, verify, vpn, profiles, monitor)
+                           orchestrate, ram_wipe, state as statemod, verify, vpn, profiles, monitor,
+                           gateway_topology, gateway, workstation)
 
 
 class ConsoleRedirector:
@@ -87,12 +88,13 @@ class PrivacyGuardGUI(tk.Tk):
         self.tab_vpn = ttk.Frame(nb)
         self.tab_profiles = ttk.Frame(nb)
         self.tab_monitor = ttk.Frame(nb)
+        self.tab_gateway = ttk.Frame(nb)
 
         for tab, label in [(self.tab_status, "Status"), (self.tab_tor, "Tor"),
                             (self.tab_proxy, "Proxy"), (self.tab_recon, "Anti-Recon"),
                             (self.tab_vm, "VM Snapshots"), (self.tab_logs, "Cleanup / Logs"),
                             (self.tab_vpn, "VPN"), (self.tab_profiles, "Profiles"),
-                            (self.tab_monitor, "Monitor")]:
+                            (self.tab_monitor, "Monitor"), (self.tab_gateway, "Gateway Mode")]:
             nb.add(tab, text=label)
 
         self._build_status_tab()
@@ -104,6 +106,7 @@ class PrivacyGuardGUI(tk.Tk):
         self._build_vpn_tab()
         self._build_profiles_tab()
         self._build_monitor_tab()
+        self._build_gateway_tab()
 
         console_frame = ttk.LabelFrame(self, text="Console output")
         console_frame.pack(fill="both", expand=False, padx=8, pady=(0, 8))
@@ -548,6 +551,100 @@ class PrivacyGuardGUI(tk.Tk):
         if self.leak_monitor:
             self.leak_monitor.stop()
         self.monitor_status_var.set("Monitor: stopped")
+
+    # ------------------------------------------------------------
+    def _build_gateway_tab(self):
+        f = self.tab_gateway
+        ttk.Label(f, text="Two-VM gateway mode: a Tor gateway VM + an isolated workstation VM with no "
+                          "direct internet route. Run each section from the corresponding machine.",
+                  wraplength=820, justify="left").pack(anchor="w", padx=8, pady=8)
+
+        # --- Host section ---
+        host_box = ttk.LabelFrame(f, text="1) HOST — wire the isolated internal network")
+        host_box.pack(fill="x", padx=8, pady=6)
+        row = ttk.Frame(host_box); row.pack(fill="x", padx=6, pady=4)
+        ttk.Label(row, text="Hypervisor:").pack(side="left")
+        self.gw_hv_var = tk.StringVar(value="vbox")
+        ttk.Combobox(row, textvariable=self.gw_hv_var, values=["vbox", "virsh"], width=8, state="readonly").pack(side="left", padx=4)
+        ttk.Label(row, text="Gateway VM:").pack(side="left")
+        self.gw_vm_var = ttk.Entry(row, width=14); self.gw_vm_var.pack(side="left", padx=4)
+        ttk.Label(row, text="Workstation VM:").pack(side="left")
+        self.ws_vm_var = ttk.Entry(row, width=14); self.ws_vm_var.pack(side="left", padx=4)
+        row2 = ttk.Frame(host_box); row2.pack(fill="x", padx=6, pady=4)
+        ttk.Button(row2, text="Wire Topology", command=self._wire_gateway_topology).pack(side="left")
+        ttk.Button(row2, text="Verify Topology (VBox only)",
+                   command=lambda: self._run_bg(gateway_topology.vbox_verify_topology,
+                                                 self.gw_vm_var.get().strip(), self.ws_vm_var.get().strip())).pack(side="left", padx=6)
+
+        # --- Gateway VM section ---
+        gw_box = ttk.LabelFrame(f, text="2) GATEWAY VM — run this from inside that VM")
+        gw_box.pack(fill="x", padx=8, pady=6)
+        row3 = ttk.Frame(gw_box); row3.pack(fill="x", padx=6, pady=4)
+        ttk.Label(row3, text="Internal iface:").pack(side="left")
+        self.gw_iface_var = ttk.Entry(row3, width=10); self.gw_iface_var.insert(0, "eth1"); self.gw_iface_var.pack(side="left", padx=4)
+        ttk.Label(row3, text="Internal IP:").pack(side="left")
+        self.gw_ip_var = ttk.Entry(row3, width=16)
+        self.gw_ip_var.insert(0, gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP)
+        self.gw_ip_var.pack(side="left", padx=4)
+        row4 = ttk.Frame(gw_box); row4.pack(fill="x", padx=6, pady=4)
+        ttk.Button(row4, text="Enable Gateway Mode", command=self._enable_gateway).pack(side="left")
+        ttk.Button(row4, text="Disable Gateway Mode", command=lambda: self._run_bg(gateway.disable_gateway, self.env)).pack(side="left", padx=6)
+
+        # --- Workstation VM section ---
+        ws_box = ttk.LabelFrame(f, text="3) WORKSTATION VM — run this from inside that VM")
+        ws_box.pack(fill="x", padx=8, pady=6)
+        row5 = ttk.Frame(ws_box); row5.pack(fill="x", padx=6, pady=4)
+        ttk.Label(row5, text="This VM's iface:").pack(side="left")
+        self.ws_iface_var = ttk.Entry(row5, width=10); self.ws_iface_var.insert(0, "eth0"); self.ws_iface_var.pack(side="left", padx=4)
+        ttk.Label(row5, text="This VM's IP:").pack(side="left")
+        self.ws_ip_var = ttk.Entry(row5, width=16)
+        self.ws_ip_var.insert(0, gateway_topology.DEFAULT_WORKSTATION_INTERNAL_IP)
+        self.ws_ip_var.pack(side="left", padx=4)
+        ttk.Label(row5, text="Gateway IP:").pack(side="left")
+        self.ws_gwip_var = ttk.Entry(row5, width=16)
+        self.ws_gwip_var.insert(0, gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP)
+        self.ws_gwip_var.pack(side="left", padx=4)
+        row6 = ttk.Frame(ws_box); row6.pack(fill="x", padx=6, pady=4)
+        ttk.Button(row6, text="Configure Networking", command=self._configure_workstation).pack(side="left")
+        ttk.Button(row6, text="Verify Isolation (actually test it)", command=self._verify_workstation).pack(side="left", padx=6)
+        ttk.Label(f, text="Isolation comes from the VM only having one network adapter (step 1) — "
+                          "this verification confirms that's really true, it doesn't create the isolation itself.",
+                  foreground="#a05a00", wraplength=820, justify="left").pack(anchor="w", padx=8, pady=(4, 8))
+
+    def _wire_gateway_topology(self):
+        hv = self.gw_hv_var.get()
+        gw_vm, ws_vm = self.gw_vm_var.get().strip(), self.ws_vm_var.get().strip()
+        if not gw_vm or not ws_vm:
+            messagebox.showerror("Missing info", "Enter both VM names.")
+            return
+
+        def do():
+            if hv == "vbox":
+                gateway_topology.vbox_wire_gateway(gw_vm)
+                gateway_topology.vbox_wire_workstation(ws_vm)
+            else:
+                gateway_topology.virsh_create_isolated_network()
+                gateway_topology.virsh_wire_gateway(gw_vm)
+                gateway_topology.virsh_wire_workstation(ws_vm)
+        self._run_bg(do)
+
+    def _enable_gateway(self):
+        iface, ip = self.gw_iface_var.get().strip(), self.gw_ip_var.get().strip()
+        if not iface or not ip:
+            messagebox.showerror("Missing info", "Enter the internal interface and IP.")
+            return
+        self._run_bg(gateway.enable_gateway, self.env, iface, ip)
+
+    def _configure_workstation(self):
+        iface, ip, gw_ip = self.ws_iface_var.get().strip(), self.ws_ip_var.get().strip(), self.ws_gwip_var.get().strip()
+        if not all([iface, ip, gw_ip]):
+            messagebox.showerror("Missing info", "Fill in interface, this VM's IP, and the gateway IP.")
+            return
+        self._run_bg(workstation.configure_networking, self.env, iface, ip, gw_ip)
+
+    def _verify_workstation(self):
+        gw_ip = self.ws_gwip_var.get().strip()
+        self._run_bg(workstation.verify_isolation, self.env, gw_ip or None)
 
 
 def launch():
