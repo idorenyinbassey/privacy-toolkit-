@@ -11,8 +11,10 @@ reflection/amplification, not anonymity. What actually changes your
 endpoint your traffic leaves from — that's what this module does.
 """
 import json
+import queue
+import ssl
 import subprocess
-import urllib.request
+import threading
 from pathlib import Path
 
 from . import environment as envmod
@@ -53,19 +55,62 @@ def stop_tor(env: envmod.Environment) -> None:
         print(f"[!] Could not stop tor: {e}")
 
 
-def check_tor_active() -> dict:
+def _tor_check_via_socks(timeout: float) -> dict:
+    """Talks to check.torproject.org through Tor's SOCKS proxy using an
+    isolated socket, not the global socket module — the previous
+    implementation did `socket.socket = socks.socksocket`, which
+    silently rerouted EVERY OTHER network call in the process through
+    Tor from that point on (a real correctness bug independent of any
+    hang), and never undid it."""
+    import socks  # type: ignore
+    sock = socks.socksocket()
+    sock.settimeout(timeout)
+    sock.set_proxy(socks.SOCKS5, "127.0.0.1", 9050)
+    sock.connect(("check.torproject.org", 443))
+    context = ssl.create_default_context()
+    ssock = context.wrap_socket(sock, server_hostname="check.torproject.org")
     try:
-        import socket
-        import socks  # type: ignore
-    except ImportError:
+        ssock.sendall(b"GET /api/ip HTTP/1.1\r\nHost: check.torproject.org\r\nConnection: close\r\n\r\n")
+        chunks = []
+        while True:
+            chunk = ssock.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        ssock.close()
+    body = b"".join(chunks).split(b"\r\n\r\n", 1)[-1]
+    return json.loads(body.decode())
+
+
+def check_tor_active(timeout: float = 10.0) -> dict:
+    """Returns the check.torproject.org API response, or {'error': ...}.
+    Hard-bounded by `timeout` regardless of what the SOCKS handshake or
+    TLS negotiation does internally. Runs the actual check in a DAEMON
+    thread rather than a ThreadPoolExecutor: a bare per-socket timeout
+    doesn't fully guarantee completion across a multi-step SOCKS5+TLS
+    handshake, and if the underlying call genuinely never returns, a
+    ThreadPoolExecutor's own shutdown() would block waiting for it too
+    — a daemon thread is abandoned cleanly at process exit instead,
+    so a stuck proxy can never hang the whole program, only this call
+    up to `timeout`."""
+    if not envmod.have_module("socks"):
         return {"error": "PySocks not installed. pip install pysocks --break-system-packages"}
+
+    result_q: "queue.Queue[dict]" = queue.Queue()  # unbounded — worker's put() never blocks
+
+    def worker():
+        try:
+            result_q.put(_tor_check_via_socks(timeout))
+        except Exception as e:
+            result_q.put({"error": str(e)})
+
+    threading.Thread(target=worker, daemon=True).start()
     try:
-        socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", 9050)
-        socket.socket = socks.socksocket
-        with urllib.request.urlopen("https://check.torproject.org/api/ip", timeout=10) as r:
-            return json.loads(r.read().decode())
-    except Exception as e:
-        return {"error": str(e)}
+        return result_q.get(timeout=timeout + 2)
+    except queue.Empty:
+        return {"error": f"timed out after {timeout}s talking to Tor's SOCKS proxy (127.0.0.1:9050) — "
+                          f"Tor may not be running, or its SocksPort isn't ready yet"}
 
 
 # --------------------------------------------------------------------

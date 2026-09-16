@@ -225,3 +225,58 @@ def test_dns_leak_verdict_ok_when_all_local(monkeypatch):
     env = envmod.detect_environment()
     report = dns_check.dns_leak_check(env, expect_local_only=True)
     assert "LIKELY LEAKING" not in report["leak_verdict"]
+
+
+# ----------------------------------------------------------------
+# proxy_tor.py — check_tor_active hang-proofing
+# ----------------------------------------------------------------
+
+def test_check_tor_active_returns_error_without_pysocks(monkeypatch):
+    monkeypatch.setattr(proxy_tor.envmod, "have_module", lambda name: False)
+    result = proxy_tor.check_tor_active()
+    assert "error" in result
+    assert "PySocks" in result["error"]
+
+
+def test_check_tor_active_never_globally_patches_socket(monkeypatch):
+    """The actual bug: the old implementation did
+    `socket.socket = socks.socksocket`, silently rerouting every OTHER
+    network call in the process through Tor from that point on, with
+    no way to undo it. The fix must not touch the global socket module
+    at all."""
+    import socket as real_socket
+    original_socket_class = real_socket.socket
+    monkeypatch.setattr(proxy_tor.envmod, "have_module", lambda name: True)
+    monkeypatch.setattr(proxy_tor, "_tor_check_via_socks", lambda timeout: {"IsTor": True, "IP": "1.2.3.4"})
+    proxy_tor.check_tor_active()
+    assert real_socket.socket is original_socket_class, \
+        "check_tor_active must never monkeypatch the global socket module"
+
+
+def test_check_tor_active_respects_hard_timeout_even_if_worker_hangs(monkeypatch):
+    """The actual fix for the reported hang: even if the underlying
+    SOCKS/TLS call never returns at all, check_tor_active must still
+    return within roughly `timeout` seconds — not block forever."""
+    import time as time_mod
+
+    def hangs_forever(timeout):
+        time_mod.sleep(1000)  # simulate a genuinely stuck call
+        return {"should": "never reach here"}
+
+    monkeypatch.setattr(proxy_tor.envmod, "have_module", lambda name: True)
+    monkeypatch.setattr(proxy_tor, "_tor_check_via_socks", hangs_forever)
+
+    start = time_mod.time()
+    result = proxy_tor.check_tor_active(timeout=0.5)
+    elapsed = time_mod.time() - start
+
+    assert "error" in result
+    assert "timed out" in result["error"]
+    assert elapsed < 5, f"check_tor_active took {elapsed}s — the hard timeout isn't actually bounding it"
+
+
+def test_check_tor_active_returns_result_on_success(monkeypatch):
+    monkeypatch.setattr(proxy_tor.envmod, "have_module", lambda name: True)
+    monkeypatch.setattr(proxy_tor, "_tor_check_via_socks", lambda timeout: {"IsTor": True, "IP": "9.9.9.9"})
+    result = proxy_tor.check_tor_active()
+    assert result == {"IsTor": True, "IP": "9.9.9.9"}

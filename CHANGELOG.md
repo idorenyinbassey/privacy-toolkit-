@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.2.5 — Fix a real hang risk + a silent global-state bug in check_tor_active
+
+Real-world report: "Start FULL anonymity mode" appeared to hang
+indefinitely after "Portscan protection already active," with no
+further output. Root cause: `check_tor_active()` did
+`socket.socket = socks.socksocket` — monkey-patching Python's global
+socket module for the ENTIRE PROCESS to route through Tor's SOCKS
+proxy, and never undoing it. Two separate problems from that one line:
+
+1. **Silent correctness bug, independent of any hang**: once called
+   once, every OTHER network call anywhere else in that same process
+   (leak reports, DNS checks, proxy tests) got silently rerouted
+   through Tor's SOCKS proxy afterward too, whether intended or not.
+2. **No real hang guarantee**: `urllib.request.urlopen(..., timeout=10)`
+   does not reliably bound every step of a SOCKS5-then-TLS handshake
+   against a proxy port that's open but not yet ready to negotiate —
+   the loop calling this had no ceiling on top of that assumption.
+
+Fix: `check_tor_active()` now runs an isolated, non-global-patching
+SOCKS+TLS request (`_tor_check_via_socks`) inside a **daemon thread**,
+with the result collected via an unbounded queue and a hard
+`queue.get(timeout=...)` ceiling on the caller's side. A daemon thread
+is abandoned cleanly at process exit if it never returns — a
+`ThreadPoolExecutor` was deliberately NOT used here, since its own
+`shutdown(wait=True)` would itself block waiting for a genuinely stuck
+worker, defeating the point.
+
+New tests, including one that simulates a worker that never returns
+at all and confirms `check_tor_active` still returns within its
+timeout, and one confirming the global `socket.socket` class is never
+touched. Suite: 73/73 passing.
+
 ## 2.2.4 — Fix DHCP-renewal race condition ("device has no carrier")
 
 Real-world report: the 2.2.3 fix (auto-renewing DHCP after a MAC
