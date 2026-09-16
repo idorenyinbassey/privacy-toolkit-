@@ -9,6 +9,7 @@ Run with: pytest tests/
 import re
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -37,6 +38,38 @@ def test_random_hostname_format():
     for _ in range(20):
         host = core.random_hostname()
         assert re.match(r"^[a-z]+-[a-z]+-\d{3}$", host)
+
+
+def test_randomize_mac_attempts_dhcp_renewal_via_nmcli(monkeypatch):
+    """The actual fix for 'changed MAC, lost internet on a bridged VM':
+    the router's lease/ARP table still points at the old MAC until
+    something forces a fresh DHCP negotiation."""
+    env = envmod.detect_environment()
+    env = env.__class__(**{**env.__dict__, "termux": False, "root": True, "has_macchanger": False})
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        result = MagicMock(returncode=0, stderr="")
+        return result
+
+    with patch("subprocess.run", side_effect=fake_run), patch.object(envmod, "have", return_value=True):
+        core.randomize_mac(env, "eth0")
+    assert ["nmcli", "device", "connect", "eth0"] in calls
+
+
+def test_randomize_mac_skips_renewal_when_disabled(monkeypatch):
+    env = envmod.detect_environment()
+    env = env.__class__(**{**env.__dict__, "termux": False, "root": True, "has_macchanger": False})
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        core.randomize_mac(env, "eth0", renew_dhcp=False)
+    assert not any("nmcli" in c for c in calls)
 
 
 # ----------------------------------------------------------------

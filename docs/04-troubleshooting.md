@@ -11,9 +11,12 @@ regardless and left you stuck with no working path out.
 
 **Current versions auto-fix this**: `enable_kill_switch` now checks
 Tor is installed, writes the required torrc lines itself if missing,
-restarts Tor, waits up to 30s for it to actually bootstrap, and
-**refuses to touch the firewall at all** if Tor never comes up —
-instead of applying a firewall with no working exit.
+restarts Tor, waits (default 45s, configurable) for it to actually
+bootstrap, and **refuses to touch the firewall at all** if Tor never
+comes up — instead of applying a firewall with no working exit. In
+2.2.2 the function also returns whether it actually succeeded, so
+"Start FULL anonymity mode" correctly skips the verification report
+instead of running it against a firewall that was never touched.
 
 **If you're on an affected version or still see this:**
 ```bash
@@ -31,9 +34,47 @@ sudo systemctl status tor
 sudo journalctl -u tor -n 50
 ```
 Common causes: Tor not installed (`sudo apt install tor`), a firewall
-elsewhere blocking Tor's own outbound connections, or the VM's clock
+elsewhere blocking Tor's own outbound connections, the VM's clock
 being badly wrong (Tor refuses to bootstrap with a sufficiently
-incorrect system time).
+incorrect system time), or simply a slow/filtered connection needing
+more than the default wait — raise it with `--bootstrap-timeout 90`
+(CLI flag) or the timeout field on the GUI's Tor tab before assuming
+Tor is actually blocked rather than just slow.
+
+## "I lost internet even though the tool said it did NOT enable the kill switch"
+
+If the log shows `[!] Tor did not bootstrap ... NOT enabling the kill
+switch` and you *still* lost connectivity, the kill switch isn't the
+cause — something else that ran earlier in the same sequence is.
+The most likely culprit: **MAC address randomization**, which runs
+unconditionally as part of "Start FULL anonymity mode" before the
+kill switch check.
+
+**Why this happens:** on a **bridged** VM (sharing your actual LAN,
+e.g. a `192.168.x.x`/`10.x.x.x` address that matches your router's
+range — as opposed to VirtualBox's own NAT range), changing the
+interface's MAC while keeping the same IP leaves your router's
+DHCP lease / ARP table pointing at the *old* MAC. Traffic can stop
+routing correctly until something forces a fresh DHCP negotiation —
+which is why a full reboot fixes it (a clean boot renegotiates DHCP).
+
+**Fixed in 2.2.3**: `randomize_mac()` now automatically attempts a
+DHCP renewal via `nmcli device connect <iface>` right after changing
+the MAC, best-effort. This resolves it on most NetworkManager-managed
+setups (which includes current Kali). If your network is still slow
+or stubborn about accepting the new MAC, or you'd rather not risk it
+at all on a bridged VM:
+
+- **Skip MAC/hostname randomization entirely**: CLI menu 17 now asks
+  "randomize MAC/hostname too? [Y/n]" — answer `n`. Or use the flag:
+  `privacyguard --start --no-randomize-identity`. The GUI's Tor tab has
+  a matching checkbox next to "Start FULL anonymity mode."
+- **If it still breaks after the auto-renewal**, manually force one:
+  `sudo nmcli device connect eth0` (or restart NetworkManager:
+  `sudo systemctl restart NetworkManager`).
+- The kill switch and Tor-bootstrap logic are entirely independent of
+  this — you can safely disable identity randomization while keeping
+  the kill switch, sysctl hardening, and portscan protection active.
 
 ## "GUI buttons say 'requires root' / nothing happens"
 

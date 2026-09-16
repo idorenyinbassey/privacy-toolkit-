@@ -191,10 +191,18 @@ class PrivacyGuardGUI(tk.Tk):
 
         ttk.Separator(f).pack(fill="x", padx=8, pady=8)
         row3 = ttk.Frame(f); row3.pack(fill="x", padx=8, pady=4)
+        self.randomize_identity_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row3, text="Also randomize MAC/hostname",
+                         variable=self.randomize_identity_var).pack(side="left")
         ttk.Button(row3, text="Start FULL anonymity mode (Tor path)",
-                   command=self._start_full_anonymity).pack(side="left")
+                   command=self._start_full_anonymity).pack(side="left", padx=6)
         ttk.Button(row3, text="Stop FULL anonymity mode",
-                   command=lambda: self._run_bg(orchestrate.full_stop, self.env)).pack(side="left", padx=6)
+                   command=lambda: self._run_bg(orchestrate.full_stop, self.env)).pack(side="left")
+        ttk.Label(f, text="Uncheck the box above if this VM is bridged onto a home/office LAN — changing "
+                          "the MAC while keeping the same IP can break connectivity until the router "
+                          "renegotiates DHCP (the tool now attempts that automatically, but some "
+                          "routers/switches are slow or stubborn about accepting a new MAC).",
+                  foreground="#a05a00", wraplength=820, justify="left").pack(anchor="w", padx=8, pady=(4, 8))
 
     def _get_bootstrap_timeout(self):
         try:
@@ -206,7 +214,8 @@ class PrivacyGuardGUI(tk.Tk):
         self._run_bg(core.enable_kill_switch, self.env, bootstrap_timeout=self._get_bootstrap_timeout())
 
     def _start_full_anonymity(self):
-        self._run_bg(orchestrate.full_start, self.env, bootstrap_timeout=self._get_bootstrap_timeout())
+        self._run_bg(orchestrate.full_start, self.env, bootstrap_timeout=self._get_bootstrap_timeout(),
+                     randomize_identity=self.randomize_identity_var.get())
 
     def _check_tor(self):
         r = proxy_tor.check_tor_active()

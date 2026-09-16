@@ -156,7 +156,9 @@ def menu(env: envmod.Environment) -> None:
                     print(f"[!] Decrypt failed: {e}")
         elif c == "17":
             bt = input("seconds to wait for Tor to bootstrap [45]: ").strip()
-            orchestrate.full_start(env, bootstrap_timeout=int(bt) if bt else 45)
+            rand_id = input("randomize MAC/hostname too? [Y/n] (say n if bridged onto a home/office LAN — "
+                            "changing MAC can break connectivity until the router renegotiates DHCP): ").strip().lower() != "n"
+            orchestrate.full_start(env, bootstrap_timeout=int(bt) if bt else 45, randomize_identity=rand_id)
         elif c == "18":
             kill_apps = input("also kill risky apps (browsers/chat clients)? [y/N]: ").strip().lower() == "y"
             wipe = input("also wipe free RAM now? [y/N]: ").strip().lower() == "y"
@@ -319,6 +321,8 @@ def main():
     parser.add_argument("--start", action="store_true")
     parser.add_argument("--bootstrap-timeout", type=int, default=45,
                          help="Seconds to wait for Tor to bootstrap before enabling the kill switch (default 45)")
+    parser.add_argument("--no-randomize-identity", action="store_true",
+                         help="Skip MAC/hostname randomization in --start (safer on a bridged VM sharing a LAN)")
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--rotate-ip", action="store_true", help="Rotate Tor circuit (new exit IP)")
@@ -354,7 +358,8 @@ def main():
         else:
             print("[i] No kill switch marked active per saved state — nothing to verify.")
     elif args.start:
-        orchestrate.full_start(env, bootstrap_timeout=args.bootstrap_timeout)
+        orchestrate.full_start(env, bootstrap_timeout=args.bootstrap_timeout,
+                                randomize_identity=not args.no_randomize_identity)
     elif args.stop:
         orchestrate.full_stop(env)
     elif args.clean:

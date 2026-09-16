@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.2.3 — Fix "MAC changed, lost internet on a bridged VM"
+
+Real-world report: even after 2.2.2's fix confirmed the kill switch
+correctly did nothing, internet access still broke — traced to MAC
+randomization, which runs unconditionally in "Start FULL anonymity
+mode" before the kill switch is ever touched. On a bridged VM (sharing
+a physical LAN), changing the MAC while keeping the same IP leaves the
+router's DHCP lease/ARP table pointed at the old MAC; connectivity
+doesn't recover until something forces a fresh negotiation, which is
+why a full reboot "fixed" it.
+
+- `core.randomize_mac()` now automatically attempts a DHCP renewal
+  (`nmcli device connect <iface>`) immediately after changing the MAC
+  — best-effort, never fails the MAC change itself if renewal isn't
+  possible, but resolves the issue outright on NetworkManager-managed
+  systems (current Kali default).
+- New `renew_dhcp` parameter (default `True`) and, more importantly,
+  a new `randomize_identity` parameter on `orchestrate.full_start` to
+  skip MAC/hostname randomization entirely — CLI menu 17 now asks,
+  `--start --no-randomize-identity` flag added, GUI Tor tab has a
+  matching checkbox. Kill switch / sysctl hardening / portscan
+  protection remain fully independent and can stay on regardless.
+- `docs/04-troubleshooting.md`: new section walking through this
+  exact scenario and how to tell it apart from the Tor-bootstrap issue.
+- New tests: DHCP-renewal-attempted / renewal-skipped-when-disabled,
+  and full_start's identity-randomization on/off paths. Suite: 66/66.
+
 ## 2.2.2 — Fix misleading verification report + configurable bootstrap timeout
 
 Real-world report: after 2.2.1 correctly refused to enable the kill

@@ -78,3 +78,33 @@ def test_full_start_passes_through_bootstrap_timeout(monkeypatch):
     monkeypatch.setattr(orchestrate.core, "enable_kill_switch", fake_enable)
     orchestrate.full_start(env, bootstrap_timeout=90)
     assert seen["timeout"] == 90
+
+
+def test_full_start_skips_mac_randomization_when_disabled(monkeypatch):
+    """The fix for 'MAC changed, lost internet on a bridged VM': let
+    the caller skip identity randomization entirely."""
+    env = make_env()
+    monkeypatch.setattr(orchestrate.proxy_tor, "start_tor", lambda e: None)
+    monkeypatch.setattr(orchestrate.anti_recon, "enable_stealth_sysctls", lambda e: None)
+    monkeypatch.setattr(orchestrate.anti_recon, "enable_portscan_protection", lambda e: None)
+    monkeypatch.setattr(orchestrate.core, "enable_kill_switch", lambda e, bootstrap_timeout=45: False)
+
+    with patch.object(orchestrate.core, "randomize_mac") as mock_mac, \
+         patch.object(orchestrate.core, "randomize_hostname") as mock_host:
+        orchestrate.full_start(env, randomize_identity=False)
+        mock_mac.assert_not_called()
+        mock_host.assert_not_called()
+
+
+def test_full_start_randomizes_identity_by_default(monkeypatch):
+    env = make_env()
+    monkeypatch.setattr(orchestrate.proxy_tor, "start_tor", lambda e: None)
+    monkeypatch.setattr(orchestrate.anti_recon, "enable_stealth_sysctls", lambda e: None)
+    monkeypatch.setattr(orchestrate.anti_recon, "enable_portscan_protection", lambda e: None)
+    monkeypatch.setattr(orchestrate.core, "enable_kill_switch", lambda e, bootstrap_timeout=45: False)
+
+    with patch.object(orchestrate.core, "randomize_mac") as mock_mac, \
+         patch.object(orchestrate.core, "randomize_hostname") as mock_host:
+        orchestrate.full_start(env)
+        mock_mac.assert_called_once()
+        mock_host.assert_called_once()

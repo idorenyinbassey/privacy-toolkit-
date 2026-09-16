@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "privacyguard"
-version = "2.2.2"
+version = "2.2.3"
 description = "Environment-aware privacy/anonymity and anti-recon automation for authorized pentesting"
 readme = "README.md"
 requires-python = ">=3.9"

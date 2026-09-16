@@ -17,7 +17,16 @@ def random_mac() -> str:
     return ":".join(f"{b:02x}" for b in [first] + rest)
 
 
-def randomize_mac(env: envmod.Environment, iface: str) -> None:
+def randomize_mac(env: envmod.Environment, iface: str, renew_dhcp: bool = True) -> None:
+    """Changing the MAC while keeping the same IP breaks connectivity
+    on many networks (especially bridged VMs sharing a home/office
+    LAN) — the router's DHCP lease / ARP table still associates that
+    IP with the OLD MAC until something forces a fresh negotiation.
+    renew_dhcp=True (default) attempts that renewal automatically via
+    NetworkManager; it's best-effort and never raises, since a failed
+    renewal attempt shouldn't be treated as the MAC change itself
+    failing — but it's the actual fix for the "changed MAC, lost
+    internet" pattern, not just cosmetic."""
     if env.termux:
         print("[!] MAC randomization needs root/netfilter — not available in Termux.")
         return
@@ -35,6 +44,26 @@ def randomize_mac(env: envmod.Environment, iface: str) -> None:
         print(f"[+] {iface} MAC set to {new_mac}")
     except subprocess.CalledProcessError as e:
         print(f"[!] MAC randomization failed on {iface}: {e}")
+        return
+
+    if not renew_dhcp:
+        print(f"[i] Skipping DHCP renewal on {iface} — if you're bridged onto a LAN, you may lose "
+              f"connectivity until the router/switch sees a fresh lease request from the new MAC.")
+        return
+
+    if envmod.have("nmcli"):
+        print(f"[*] Requesting a fresh DHCP lease for {iface} (MAC changed, IP likely still stale)...")
+        result = subprocess.run(["nmcli", "device", "connect", iface], capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"[+] {iface} reconnected via NetworkManager — should have a lease matching the new MAC now.")
+        else:
+            print(f"[!] Could not auto-renew via nmcli ({result.stderr.strip() or 'unknown error'}). "
+                  f"If connectivity breaks, try: sudo nmcli device connect {iface}")
+    else:
+        print(f"[i] No NetworkManager (nmcli) found to auto-renew the DHCP lease. If connectivity "
+              f"breaks on {iface} — especially on a bridged VM sharing a physical LAN — manually "
+              f"renew it (e.g. `sudo dhclient -r {iface} && sudo dhclient {iface}`, or restart "
+              f"networking) rather than assuming the interface itself is broken.")
 
 
 ADJECTIVES = ["quiet", "amber", "lunar", "cobalt", "hidden", "swift", "gray", "silent"]

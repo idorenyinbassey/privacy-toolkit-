@@ -15,19 +15,30 @@ def leak_report(env: envmod.Environment) -> None:
         print(f"  Via Tor   : {tc.get('IsTor', 'unknown')}  (exit IP: {tc.get('IP', '?')})")
 
 
-def full_start(env: envmod.Environment, run_verification: bool = True, bootstrap_timeout: int = 45) -> bool:
+def full_start(env: envmod.Environment, run_verification: bool = True, bootstrap_timeout: int = 45,
+               randomize_identity: bool = True) -> bool:
     """Full anonymity mode via the Tor path. For networks that block
     Tor outright, use proxy_only.enable_proxy_kill_switch() instead —
     see the GUI's Proxy tab or the CLI's proxy-only menu option.
     Returns True only if the kill switch actually ended up active —
-    check this before assuming anything downstream is protected."""
+    check this before assuming anything downstream is protected.
+
+    randomize_identity=False skips MAC/hostname randomization — worth
+    doing on a bridged VM sharing a physical LAN, where changing the
+    MAC while keeping the same IP can break connectivity until the
+    router/switch sees a fresh DHCP negotiation (randomize_mac()
+    attempts that renewal automatically, but some networks are
+    stubborn about accepting a new MAC quickly regardless)."""
     print("=== Starting anonymity mode (Tor path) ===")
     proxy_tor.start_tor(env)
     kill_switch_active = False
     if not env.termux:
-        for iface in env.interfaces:
-            core.randomize_mac(env, iface)
-        core.randomize_hostname(env)
+        if randomize_identity:
+            for iface in env.interfaces:
+                core.randomize_mac(env, iface)
+            core.randomize_hostname(env)
+        else:
+            print("[i] Skipping MAC/hostname randomization (randomize_identity=False).")
         anti_recon.enable_stealth_sysctls(env)
         anti_recon.enable_portscan_protection(env)
         kill_switch_active = core.enable_kill_switch(env, bootstrap_timeout=bootstrap_timeout)
