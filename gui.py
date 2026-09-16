@@ -172,9 +172,17 @@ class PrivacyGuardGUI(tk.Tk):
 
         ttk.Label(f, text="Tor kill switch (all traffic forced through Tor, full Linux + root):").pack(anchor="w", padx=8, pady=(12, 0))
         row2 = ttk.Frame(f); row2.pack(fill="x", padx=8, pady=4)
-        ttk.Button(row2, text="Enable Kill Switch", command=lambda: self._run_bg(core.enable_kill_switch, self.env)).pack(side="left")
+        ttk.Label(row2, text="Bootstrap timeout (s):").pack(side="left")
+        self.bootstrap_timeout_var = ttk.Entry(row2, width=5)
+        self.bootstrap_timeout_var.insert(0, "45")
+        self.bootstrap_timeout_var.pack(side="left", padx=4)
+        ttk.Button(row2, text="Enable Kill Switch", command=self._enable_tor_kill_switch).pack(side="left", padx=6)
         ttk.Button(row2, text="Disable Kill Switch", command=lambda: self._run_bg(core.disable_kill_switch, self.env)).pack(side="left", padx=6)
         ttk.Button(row2, text="Verify (actually test it)", command=lambda: self._run_bg(verify.verify_tor_kill_switch, self.env)).pack(side="left", padx=6)
+        ttk.Label(f, text="If Tor is on a slow/filtered connection, raise this before enabling — "
+                          "the switch refuses to apply if Tor hasn't bootstrapped in time, so a low "
+                          "value just means more refusals, never a lockout.",
+                  foreground="#a05a00", wraplength=820, justify="left").pack(anchor="w", padx=8, pady=(0, 4))
 
         ttk.Label(f, text="Bridges (paste lines from https://bridges.torproject.org, one per line):").pack(anchor="w", padx=8, pady=(12, 0))
         self.bridges_text = tk.Text(f, height=6)
@@ -184,9 +192,21 @@ class PrivacyGuardGUI(tk.Tk):
         ttk.Separator(f).pack(fill="x", padx=8, pady=8)
         row3 = ttk.Frame(f); row3.pack(fill="x", padx=8, pady=4)
         ttk.Button(row3, text="Start FULL anonymity mode (Tor path)",
-                   command=lambda: self._run_bg(orchestrate.full_start, self.env)).pack(side="left")
+                   command=self._start_full_anonymity).pack(side="left")
         ttk.Button(row3, text="Stop FULL anonymity mode",
                    command=lambda: self._run_bg(orchestrate.full_stop, self.env)).pack(side="left", padx=6)
+
+    def _get_bootstrap_timeout(self):
+        try:
+            return int(self.bootstrap_timeout_var.get().strip())
+        except ValueError:
+            return 45
+
+    def _enable_tor_kill_switch(self):
+        self._run_bg(core.enable_kill_switch, self.env, bootstrap_timeout=self._get_bootstrap_timeout())
+
+    def _start_full_anonymity(self):
+        self._run_bg(orchestrate.full_start, self.env, bootstrap_timeout=self._get_bootstrap_timeout())
 
     def _check_tor(self):
         r = proxy_tor.check_tor_active()

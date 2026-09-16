@@ -96,14 +96,40 @@ def test_enable_kill_switch_refuses_when_tor_never_bootstraps(tmp_path, monkeypa
     """The actual bug this was written to catch: enabling the kill
     switch when Tor never comes up used to still apply the DROP-all
     firewall, killing all internet access with no working path out.
-    It must now refuse instead."""
+    It must now refuse instead, and report that refusal via its
+    return value so callers (orchestrate.full_start) can act on it."""
     monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(core, "_ensure_transparent_proxy_torrc", lambda *a, **kw: False)
     monkeypatch.setattr(core, "_wait_for_tor_bootstrap", lambda *a, **kw: False)
     env = make_env()
     with patch("subprocess.run") as mock_run:
-        core.enable_kill_switch(env)
+        result = core.enable_kill_switch(env)
         mock_run.assert_not_called()
+        assert result is False, "must report failure via return value, not just print a warning"
+
+
+def test_enable_kill_switch_returns_true_on_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(core, "_ensure_transparent_proxy_torrc", lambda *a, **kw: False)
+    monkeypatch.setattr(core, "_wait_for_tor_bootstrap", lambda *a, **kw: True)
+    from privacyguard import firewall_backup
+    monkeypatch.setattr(firewall_backup, "BACKUP_DIR", tmp_path / "backups")
+    env = make_env()
+    mock_result = MagicMock(returncode=0, stdout="# fake\n")
+    with patch("subprocess.run", return_value=mock_result):
+        result = core.enable_kill_switch(env)
+    assert result is True
+
+
+def test_enable_kill_switch_returns_false_without_root():
+    env = make_env(root=False)
+    assert core.enable_kill_switch(env) is False
+
+
+def test_enable_kill_switch_returns_false_without_tor(tmp_path, monkeypatch):
+    monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
+    env = make_env(has_tor=False)
+    assert core.enable_kill_switch(env) is False
 
 
 def test_ensure_transparent_proxy_torrc_writes_fresh_file(tmp_path):

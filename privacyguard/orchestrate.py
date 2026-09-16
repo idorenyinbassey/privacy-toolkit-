@@ -15,26 +15,33 @@ def leak_report(env: envmod.Environment) -> None:
         print(f"  Via Tor   : {tc.get('IsTor', 'unknown')}  (exit IP: {tc.get('IP', '?')})")
 
 
-def full_start(env: envmod.Environment, run_verification: bool = True) -> None:
+def full_start(env: envmod.Environment, run_verification: bool = True, bootstrap_timeout: int = 45) -> bool:
     """Full anonymity mode via the Tor path. For networks that block
     Tor outright, use proxy_only.enable_proxy_kill_switch() instead —
-    see the GUI's Proxy tab or the CLI's proxy-only menu option."""
+    see the GUI's Proxy tab or the CLI's proxy-only menu option.
+    Returns True only if the kill switch actually ended up active —
+    check this before assuming anything downstream is protected."""
     print("=== Starting anonymity mode (Tor path) ===")
     proxy_tor.start_tor(env)
+    kill_switch_active = False
     if not env.termux:
         for iface in env.interfaces:
             core.randomize_mac(env, iface)
         core.randomize_hostname(env)
         anti_recon.enable_stealth_sysctls(env)
         anti_recon.enable_portscan_protection(env)
-        core.enable_kill_switch(env)
-        if run_verification:
-            print("[*] Waiting 8s for Tor to bootstrap before verifying...")
+        kill_switch_active = core.enable_kill_switch(env, bootstrap_timeout=bootstrap_timeout)
+        if not kill_switch_active:
+            print("[!] Kill switch was NOT enabled (see reason above) — skipping verification, "
+                  "since there's nothing active to verify. You are running WITHOUT a kill switch right now.")
+        elif run_verification:
+            print("[*] Waiting 8s before verifying...")
             time.sleep(8)
             verify.verify_tor_kill_switch(env)
     else:
         print("[i] Termux: wrap traffic with `torsocks <command>` or a no-Tor proxychains config.")
     print("=== Done. ===")
+    return kill_switch_active
 
 
 def full_stop(env: envmod.Environment, kill_risky_apps: bool = False, wipe_ram: bool = False,

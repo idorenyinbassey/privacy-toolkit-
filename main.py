@@ -72,8 +72,11 @@ def menu(env: envmod.Environment) -> None:
                 core.randomize_mac(env, iface)
             core.randomize_hostname(env)
         elif c == "6":
-            (core.enable_kill_switch if input("enable or disable? [enable/disable]: ").strip() == "enable"
-             else core.disable_kill_switch)(env)
+            if input("enable or disable? [enable/disable]: ").strip() == "enable":
+                bt = input("seconds to wait for Tor to bootstrap [45]: ").strip()
+                core.enable_kill_switch(env, bootstrap_timeout=int(bt) if bt else 45)
+            else:
+                core.disable_kill_switch(env)
         elif c == "7":
             (anti_recon.enable_stealth_sysctls if input("enable/disable: ").strip() == "enable"
              else anti_recon.disable_stealth_sysctls)(env)
@@ -118,9 +121,11 @@ def menu(env: envmod.Environment) -> None:
                 ptype = input("proxy type [socks5/socks4/http-connect] (default socks5): ").strip() or "socks5"
                 user = input("username (leave blank if none): ").strip() or None
                 pw = input("password (leave blank if none): ").strip() or None
-                proxy_only.enable_proxy_kill_switch(env, host, port, ptype, username=user, password=pw)
-                if input("run verification now? [Y/n]: ").strip().lower() != "n":
+                switch_active = proxy_only.enable_proxy_kill_switch(env, host, port, ptype, username=user, password=pw)
+                if switch_active and input("run verification now? [Y/n]: ").strip().lower() != "n":
                     verify.verify_proxy_kill_switch(env, host)
+                elif not switch_active:
+                    print("[i] Skipping verification — the kill switch was not enabled (see reason above).")
             else:
                 proxy_only.disable_proxy_kill_switch(env)
         elif c == "14":
@@ -150,7 +155,8 @@ def menu(env: envmod.Environment) -> None:
                 except Exception as e:
                     print(f"[!] Decrypt failed: {e}")
         elif c == "17":
-            orchestrate.full_start(env)
+            bt = input("seconds to wait for Tor to bootstrap [45]: ").strip()
+            orchestrate.full_start(env, bootstrap_timeout=int(bt) if bt else 45)
         elif c == "18":
             kill_apps = input("also kill risky apps (browsers/chat clients)? [y/N]: ").strip().lower() == "y"
             wipe = input("also wipe free RAM now? [y/N]: ").strip().lower() == "y"
@@ -311,6 +317,8 @@ def main():
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--dns-leak-check", action="store_true")
     parser.add_argument("--start", action="store_true")
+    parser.add_argument("--bootstrap-timeout", type=int, default=45,
+                         help="Seconds to wait for Tor to bootstrap before enabling the kill switch (default 45)")
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--rotate-ip", action="store_true", help="Rotate Tor circuit (new exit IP)")
@@ -346,7 +354,7 @@ def main():
         else:
             print("[i] No kill switch marked active per saved state — nothing to verify.")
     elif args.start:
-        orchestrate.full_start(env)
+        orchestrate.full_start(env, bootstrap_timeout=args.bootstrap_timeout)
     elif args.stop:
         orchestrate.full_stop(env)
     elif args.clean:

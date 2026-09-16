@@ -161,26 +161,30 @@ def _wait_for_tor_bootstrap(env: envmod.Environment, timeout: int = 30) -> bool:
     return False
 
 
-def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_timeout: int = 30) -> None:
+def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_timeout: int = 45) -> bool:
+    """Returns True only if the kill switch was actually applied.
+    Callers (orchestrate.full_start, the CLI, the GUI) must check this
+    before treating the system as protected — a False return means we
+    correctly declined rather than a rule silently failing."""
     if env.termux:
         print("[!] Kill switch needs iptables — unavailable in Termux. Use Orbot VPN mode instead.")
-        return
+        return False
     if not env.root or not env.has_iptables:
         print("[!] Kill switch requires root + iptables.")
-        return
+        return False
     if not env.has_tor:
         print("[!] Tor isn't installed on this system. Install it first: sudo apt install tor")
         print("    Enabling the kill switch without Tor would drop all internet access — refusing.")
-        return
+        return False
     st = statemod.load()
     if st["tor_kill_switch"] and not force:
         print("[i] Tor kill switch already active (per saved state). Disable it first, "
               "or call with force=True to re-apply.")
-        return
+        return True  # already genuinely active, not a failure
     if st["proxy_only_kill_switch"]:
         print("[!] Proxy-only kill switch is currently active — disable that first "
               "(both rewrite the same OUTPUT chain and will conflict).")
-        return
+        return False
 
     # Fix the actual root cause of "enabled kill switch, lost internet":
     # verify/auto-configure torrc, restart tor if changed, then confirm
@@ -197,7 +201,10 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_t
         print(f"[!] Tor did not bootstrap within {bootstrap_timeout}s. NOT enabling the kill switch — "
               f"doing so now would drop all internet access with no working Tor path to replace it.")
         print("    Check: sudo systemctl status tor   /   sudo journalctl -u tor -n 50")
-        return
+        print("    First bootstrap can genuinely take longer than 45s on a slow/filtered connection — "
+              "retry with a longer bootstrap_timeout, or configure bridges (menu 11) if Tor looks "
+              "stuck rather than just slow.")
+        return False
 
     backups = firewall_backup.backup_rules(env, label="pre-tor-killswitch")
 
@@ -226,8 +233,9 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_t
         print("[!] Kill switch application had errors — restoring pre-existing rules rather than "
               "leaving a half-applied firewall.")
         firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
-        return
+        return False
     block_ipv6(env)
+    return True
 
 
 def disable_kill_switch(env: envmod.Environment) -> None:

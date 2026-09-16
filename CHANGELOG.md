@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.2.2 — Fix misleading verification report + configurable bootstrap timeout
+
+Real-world report: after 2.2.1 correctly refused to enable the kill
+switch when Tor failed to bootstrap, `orchestrate.full_start` still
+ran `verify.verify_tor_kill_switch` unconditionally afterward — printing
+a `[FAIL]` report immediately after "NOT enabling the kill switch,"
+reading as if something broke when the tool had actually done exactly
+the right thing (nothing).
+
+**Root cause:** `core.enable_kill_switch` and
+`proxy_only.enable_proxy_kill_switch` returned `None` on every path,
+giving callers no way to distinguish "applied" from "correctly
+declined." Both now return `bool`; `orchestrate.full_start` and the
+CLI's proxy-only menu check it and skip verification (with a clear
+"kill switch was NOT enabled, skipping verification" message) rather
+than running a check against a firewall that was never touched.
+
+Also: default bootstrap timeout raised 30s -> 45s, and made
+configurable everywhere it's used (CLI menu 6/17, `--start
+--bootstrap-timeout N`, GUI Tor tab has a timeout field) — first
+bootstrap can genuinely take longer than 30s on a slow or filtered
+connection, and a fixed timeout was forcing a false negative there.
+
+New tests: `tests/test_orchestrate.py` (full_start skips/runs
+verification correctly based on the return value, timeout threads
+through), plus return-value coverage for both enable functions.
+Suite: 62/62 passing.
+
 ## 2.2.1 — Fix the actual "enabled kill switch, lost internet" bug + wiki
 
 **Root cause fix:** `enable_kill_switch` and `enable_proxy_kill_switch`

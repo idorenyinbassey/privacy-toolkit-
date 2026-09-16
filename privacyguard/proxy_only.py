@@ -71,17 +71,18 @@ def _proxy_reachable(host: str, port: int, timeout: float = 5.0) -> bool:
 
 def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_port: int,
                               proxy_type: str = "socks5", username: str = None, password: str = None,
-                              force: bool = False) -> None:
+                              force: bool = False) -> bool:
+    """Returns True only if the kill switch was actually applied."""
     if env.termux:
         print("[!] System-wide proxy routing needs root/netfilter — unavailable in Termux.")
         print("    Use proxychains (include_tor=False) to wrap individual commands instead.")
-        return
+        return False
     if not env.root or not env.has_iptables:
         print("[!] Needs root + iptables.")
-        return
+        return False
     if not envmod.have("redsocks"):
         print("[!] redsocks not installed. sudo apt install redsocks")
-        return
+        return False
 
     # Fix the same failure mode as the Tor kill switch: redirecting all
     # traffic to a proxy that isn't actually reachable = total internet
@@ -90,17 +91,17 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
         print(f"[!] Could not reach {proxy_host}:{proxy_port} — NOT enabling the kill switch. "
               f"Doing so now would drop all internet access with no working proxy path to replace it.")
         print("    Double-check the host/port/credentials and that the proxy is actually up.")
-        return
+        return False
 
     st = statemod.load()
     if st["proxy_only_kill_switch"] and not force:
         print("[i] Proxy-only kill switch already active (per saved state). Disable it first, "
               "or call with force=True to re-apply.")
-        return
+        return True  # already genuinely active, not a failure
     if st["tor_kill_switch"]:
         print("[!] Tor kill switch is currently active — disable that first "
               "(both rewrite the same OUTPUT chain and will conflict).")
-        return
+        return False
 
     backups = firewall_backup.backup_rules(env, label="pre-proxy-killswitch")
 
@@ -131,8 +132,9 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
     else:
         print("[!] Rule application had errors — restoring pre-existing rules.")
         firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
-        return
+        return False
     coremod.block_ipv6(env)
+    return True
 
 
 def disable_proxy_kill_switch(env: envmod.Environment) -> None:
