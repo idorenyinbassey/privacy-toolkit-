@@ -53,7 +53,8 @@ def test_randomize_mac_attempts_dhcp_renewal_via_nmcli(monkeypatch):
         result = MagicMock(returncode=0, stderr="")
         return result
 
-    with patch("subprocess.run", side_effect=fake_run), patch.object(envmod, "have", return_value=True):
+    with patch("subprocess.run", side_effect=fake_run), patch.object(envmod, "have", return_value=True), \
+         patch.object(core, "_wait_for_carrier", return_value=True):
         core.randomize_mac(env, "eth0")
     assert ["nmcli", "device", "connect", "eth0"] in calls
 
@@ -70,6 +71,39 @@ def test_randomize_mac_skips_renewal_when_disabled(monkeypatch):
     with patch("subprocess.run", side_effect=fake_run):
         core.randomize_mac(env, "eth0", renew_dhcp=False)
     assert not any("nmcli" in c for c in calls)
+
+
+def test_wait_for_carrier_returns_true_when_up(tmp_path, monkeypatch):
+    carrier_file = tmp_path / "carrier"
+    carrier_file.write_text("1")
+    monkeypatch.setattr(core, "Path", lambda p: carrier_file if "carrier" in p else Path(p))
+    assert core._wait_for_carrier("eth0", timeout=1.0) is True
+
+
+def test_wait_for_carrier_times_out_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "Path", lambda p: tmp_path / "does-not-exist" if "carrier" in p else Path(p))
+    assert core._wait_for_carrier("eth0", timeout=0.5) is False
+
+
+def test_randomize_mac_skips_renewal_when_carrier_never_returns(monkeypatch):
+    """The actual bug this fixes: calling nmcli before the link's
+    carrier signal comes back after the down/up cycle fails with
+    'device has no carrier' — a race, not a real problem. Waiting for
+    carrier first (and giving up cleanly if it never comes) avoids
+    that failed call entirely rather than trying and getting a
+    confusing nmcli error."""
+    env = envmod.detect_environment()
+    env = env.__class__(**{**env.__dict__, "termux": False, "root": True, "has_macchanger": False})
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run), patch.object(envmod, "have", return_value=True), \
+         patch.object(core, "_wait_for_carrier", return_value=False):
+        core.randomize_mac(env, "eth0")
+    assert not any("nmcli" in c for c in calls), "should never call nmcli if carrier never came back"
 
 
 # ----------------------------------------------------------------

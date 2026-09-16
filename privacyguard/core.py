@@ -17,6 +17,25 @@ def random_mac() -> str:
     return ":".join(f"{b:02x}" for b in [first] + rest)
 
 
+def _wait_for_carrier(iface: str, timeout: float = 5.0) -> bool:
+    """Poll the kernel's own carrier-detect state rather than guessing
+    with a fixed sleep. After `ip link set dev <iface> down`/`up` (as
+    a MAC change requires), there's a real gap before the virtual/
+    physical link reports carrier again — trying a DHCP renewal
+    before that settles fails with 'device has no carrier', not
+    because anything's actually broken, just too eager."""
+    carrier_path = Path(f"/sys/class/net/{iface}/carrier")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if carrier_path.read_text().strip() == "1":
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
 def randomize_mac(env: envmod.Environment, iface: str, renew_dhcp: bool = True) -> None:
     """Changing the MAC while keeping the same IP breaks connectivity
     on many networks (especially bridged VMs sharing a home/office
@@ -52,6 +71,12 @@ def randomize_mac(env: envmod.Environment, iface: str, renew_dhcp: bool = True) 
         return
 
     if envmod.have("nmcli"):
+        print(f"[*] Waiting for {iface}'s link to come back up before requesting a lease...")
+        if not _wait_for_carrier(iface, timeout=5.0):
+            print(f"[!] {iface} never reported carrier within 5s — skipping auto-renewal to avoid "
+                  f"a 'no carrier' failure. If connectivity breaks, try manually once the link is up: "
+                  f"sudo nmcli device connect {iface}")
+            return
         print(f"[*] Requesting a fresh DHCP lease for {iface} (MAC changed, IP likely still stale)...")
         result = subprocess.run(["nmcli", "device", "connect", iface], capture_output=True, text=True)
         if result.returncode == 0:

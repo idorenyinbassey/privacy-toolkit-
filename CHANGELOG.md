@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2.4 — Fix DHCP-renewal race condition ("device has no carrier")
+
+Real-world report: the 2.2.3 fix (auto-renewing DHCP after a MAC
+change via `nmcli device connect`) itself had a bug — it called nmcli
+immediately after `ip link set dev <iface> up`, before the virtual
+NIC's link had actually re-established carrier. nmcli correctly
+refused with "device has no carrier," which is accurate but not
+actionable, since the real fix is timing, not something the user
+needs to intervene on.
+
+- New `_wait_for_carrier(iface, timeout=5.0)` polls
+  `/sys/class/net/<iface>/carrier` directly (the kernel's own
+  link-state signal) instead of guessing with a fixed sleep.
+  `randomize_mac()` now waits for carrier before attempting the
+  renewal, and skips the renewal cleanly (with clear manual-fallback
+  guidance) rather than trying and failing if carrier never returns
+  within the timeout.
+- New tests: `_wait_for_carrier` behavior directly, plus a case
+  confirming `randomize_mac` never calls `nmcli` when carrier never
+  comes back. Suite: 69/69 passing.
+
 ## 2.2.3 — Fix "MAC changed, lost internet on a bridged VM"
 
 Real-world report: even after 2.2.2's fix confirmed the kill switch
