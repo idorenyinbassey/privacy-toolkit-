@@ -1,5 +1,49 @@
 # Troubleshooting
 
+## "Tor never bootstraps, or crash-loops instead of starting"
+
+**Root cause (fixed in 2.2.6)**: `/etc/tor/torrc` had two conflicting
+`TransPort` (or `DNSPort`) directives both claiming the same port —
+often because this tool's OWN pre-2.2.1 README told people to
+manually add those lines before auto-configuration existed, and the
+old auto-config logic only checked whether its own managed block was
+present, never whether some OTHER line elsewhere in the file was also
+claiming the same port. Tor refuses to bind a duplicate port and
+exits immediately — repeatedly, in a crash loop — which from the
+outside looks identical to "slow to bootstrap" or "hung," but isn't.
+
+**How to tell the difference**: `sudo journalctl -u tor -n 50` showing
+`Starting`/`Finished` at the same timestamp, repeating every few
+seconds or minutes, is a crash loop — not a slow bootstrap. Confirm
+directly:
+```bash
+sudo systemctl stop tor
+sudo -u debian-tor tor -f /etc/tor/torrc
+```
+This runs Tor in the foreground and prints its own error output. A
+`Bootstrapped 10%... 50%... 100%` climb means it's genuinely working
+(just slow — raise `--bootstrap-timeout`). An immediate exit with a
+`Could not bind` or similar error means a config conflict — check:
+```bash
+sudo cat /etc/tor/torrc
+```
+for more than one `TransPort` or `DNSPort` line. Current versions
+(2.2.6+) detect and remove this automatically before ever applying
+the kill switch; if you're on an older version or the conflict was
+introduced by hand, clean it up manually:
+```bash
+sudo cp /etc/tor/torrc /etc/tor/torrc.backup
+sudo tee /etc/tor/torrc > /dev/null << 'TORRC'
+VirtualAddrNetwork 10.192.0.0/10
+AutomapHostsOnResolve 1
+SocksPort 9050
+TransPort 127.0.0.1:9040
+DNSPort 127.0.0.1:5353
+RunAsDaemon 1
+TORRC
+sudo systemctl restart tor
+```
+
 ## "I enabled the kill switch and lost internet access"
 
 **Root cause (fixed in 2.2.1):** the kill switch redirects all traffic

@@ -157,6 +157,72 @@ def test_ensure_transparent_proxy_torrc_preserves_other_content(tmp_path):
     assert "TransPort 127.0.0.1:9040" in content
 
 
+def test_ensure_transparent_proxy_torrc_removes_conflicting_manual_lines(tmp_path):
+    """The actual bug this fixes: this tool's own earlier README told
+    people to manually add TransPort/DNSPort to torrc before
+    auto-config existed. If that line is still there, having BOTH it
+    and our managed block means two directives fighting over the same
+    port — Tor refuses to bind and crash-loops instead of bootstrapping,
+    which looks identical to a slow/blocked network from the outside."""
+    torrc = tmp_path / "torrc"
+    torrc.write_text(
+        "VirtualAddrNetwork 10.192.0.0/10\n"
+        "AutomapHostsOnResolve 1\n"
+        "TransPort 9040\n"
+        "SocksPort 9050\n"
+        "DNSPort 53\n"
+        "RunAsDaemon 1\n"
+    )
+    changed = core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    assert changed is True
+    content = torrc.read_text()
+    # exactly one TransPort and one DNSPort line, both ours
+    transport_lines = [l for l in content.splitlines() if l.strip().startswith("TransPort")]
+    dnsport_lines = [l for l in content.splitlines() if l.strip().startswith("DNSPort")]
+    assert transport_lines == ["TransPort 127.0.0.1:9040"]
+    assert dnsport_lines == ["DNSPort 127.0.0.1:5353"]
+    # unrelated lines survive
+    assert "SocksPort 9050" in content
+    assert "RunAsDaemon 1" in content
+
+
+def test_ensure_transparent_proxy_torrc_cleans_up_even_when_marker_already_present(tmp_path):
+    """The exact scenario reported: our own managed block was already
+    written in an earlier run (marker present), but a manual/leftover
+    TransPort line elsewhere in the file was never cleaned up because
+    the old logic only checked 'is my marker here', not 'is anything
+    ELSE also claiming this port'."""
+    torrc = tmp_path / "torrc"
+    torrc.write_text(
+        "TransPort 9040\n"
+        "DNSPort 53\n"
+        "SocksPort 9050\n"
+        "\n"
+        "# --- PrivacyGuard kill switch (managed block) ---\n"
+        "TransPort 127.0.0.1:9040\n"
+        "DNSPort 127.0.0.1:5353\n"
+        "AutomapHostsOnResolve 1\n"
+        "# --- end PrivacyGuard kill switch ---\n"
+    )
+    changed = core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    assert changed is True, "must detect and fix the conflict even though its own marker was present"
+    content = torrc.read_text()
+    transport_lines = [l for l in content.splitlines() if l.strip().startswith("TransPort")]
+    dnsport_lines = [l for l in content.splitlines() if l.strip().startswith("DNSPort")]
+    assert transport_lines == ["TransPort 127.0.0.1:9040"]
+    assert dnsport_lines == ["DNSPort 127.0.0.1:5353"]
+
+
+def test_ensure_transparent_proxy_torrc_stable_after_cleanup(tmp_path):
+    """Once cleaned up, a second call must report no further change —
+    otherwise every kill-switch enable would restart tor unnecessarily."""
+    torrc = tmp_path / "torrc"
+    torrc.write_text("TransPort 9040\nDNSPort 53\nSocksPort 9050\n")
+    core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    changed_again = core._ensure_transparent_proxy_torrc(torrc_path=torrc)
+    assert changed_again is False
+
+
 def test_block_ipv6_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(statemod, "STATE_FILE", tmp_path / "state.json")
     statemod.update(ipv6_blocked=True)

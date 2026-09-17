@@ -160,40 +160,66 @@ def unblock_ipv6(env: envmod.Environment) -> None:
 
 
 def _ensure_transparent_proxy_torrc(torrc_path: Path = None) -> bool:
-    """Ensures torrc has TransPort 9040 / DNSPort 5353 — the redirect
-    rules below send traffic to these ports, and if nothing is
-    listening there (the actual bug behind 'enabled kill switch, lost
-    all internet'), every connection just fails silently. Idempotent:
-    returns True only if it changed the file (caller should restart
-    tor), False if it was already correctly configured."""
+    """Ensures torrc has EXACTLY ONE TransPort/DNSPort pair — ours —
+    and nothing else fighting over those ports.
+
+    The actual bug this fixes: this tool's own README used to instruct
+    people to manually add TransPort/DNSPort lines to torrc before
+    auto-configuration existed, and if that manual line is still
+    there, the OLD version of this function would add its own managed
+    block right alongside it without ever removing the old one — two
+    directives both trying to bind port 9040 makes Tor refuse to
+    start at all (crash-loops instead of bootstrapping), which looks
+    identical to a slow/blocked network from the outside and is very
+    hard to tell apart without reading torrc directly.
+
+    Now: strip ANY existing TransPort/DNSPort lines — ours from a
+    prior run, or a manually-added one, or a stray duplicate — and
+    write back exactly one canonical block. Idempotent: returns True
+    only if the file's content actually changed (caller should
+    restart tor), False if it was already exactly right."""
     path = torrc_path or Path("/etc/tor/torrc")
     marker_start = "# --- PrivacyGuard kill switch (managed block) ---"
     marker_end = "# --- end PrivacyGuard kill switch ---"
-    block_body = "TransPort 127.0.0.1:9040\nDNSPort 127.0.0.1:5353\nAutomapHostsOnResolve 1"
-    block = f"{marker_start}\n{block_body}\n{marker_end}\n"
+    block = (
+        f"{marker_start}\n"
+        f"TransPort 127.0.0.1:9040\n"
+        f"DNSPort 127.0.0.1:5353\n"
+        f"AutomapHostsOnResolve 1\n"
+        f"{marker_end}\n"
+    )
 
     try:
-        existing = path.read_text() if path.exists() else ""
+        original = path.read_text() if path.exists() else ""
     except PermissionError:
         print(f"[!] No permission to read {path}.")
         return False
 
-    if marker_start in existing:
-        current_body = existing.split(marker_start)[1].split(marker_end)[0].strip()
-        if current_body == block_body:
-            return False  # already correctly configured, no restart needed
-        pre, post = existing.split(marker_start)[0], existing.split(marker_end)[-1]
-        new_content = pre + block + post
-    else:
-        new_content = existing.rstrip("\n") + "\n\n" + block
+    working = original
+    if marker_start in working and marker_end in working:
+        working = working.split(marker_start)[0] + working.split(marker_end)[-1]
+
+    # Strip ANY other TransPort/DNSPort directive, regardless of where
+    # it came from — a leftover manual line, a stray duplicate, etc.
+    # A line fighting over the same port as ours is the actual failure
+    # mode, not a cosmetic issue.
+    kept_lines = [
+        line for line in working.splitlines()
+        if not line.strip().startswith(("TransPort", "DNSPort"))
+    ]
+    base = "\n".join(kept_lines).rstrip("\n")
+    new_content = (base + "\n\n" + block) if base else block
+
+    if new_content == original:
+        return False  # already exactly right, no change needed
 
     try:
         path.write_text(new_content)
     except PermissionError:
         print(f"[!] No permission to write {path}.")
         return False
-    print(f"[+] Configured {path} with TransPort 9040 / DNSPort 5353 — required for the kill switch "
-          f"to actually route anywhere instead of dropping everything.")
+    print(f"[+] Configured {path} with a single, non-conflicting TransPort 9040 / DNSPort 5353 — "
+          f"required for the kill switch to actually route anywhere instead of dropping everything.")
     return True
 
 

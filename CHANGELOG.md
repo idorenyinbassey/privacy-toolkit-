@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.2.6 — Fix the actual root cause of the whole "Tor never bootstraps" saga
+
+Real-world diagnosis, tracing through several prior sessions of
+"stuck"/"hangs"/"Tor did not bootstrap" reports that turned out to be
+one underlying config bug, not any of the timing/threading issues
+fixed in 2.2.1-2.2.5 (all of which were real, and stayed fixed —
+this was a separate, deeper cause layered underneath them).
+
+Manually running Tor in the foreground revealed it crash-looping
+(exiting within the same second it started, repeatedly) rather than
+slowly failing to bootstrap. `journalctl -u tor` only ever showed
+generic systemd start/stop lines because Tor was dying before it
+could log anything useful to its own log file.
+
+**Root cause**: `/etc/tor/torrc` had TWO conflicting `TransPort`
+directives — one unqualified (`TransPort 9040`, likely added manually
+following this tool's OWN pre-2.2.1 README, which instructed manual
+torrc setup before auto-configuration existed) and one from our own
+auto-written managed block (`TransPort 127.0.0.1:9040`). Both claim
+port 9040; Tor refuses to bind the second and exits immediately. The
+old `_ensure_transparent_proxy_torrc()` only ever checked "is my own
+managed-block marker present" — it never checked for OTHER
+TransPort/DNSPort lines elsewhere in the file, so a leftover manual
+line (or any other duplicate) was never cleaned up, even across many
+runs where the marker WAS already present.
+
+Fix: the function now strips ANY existing `TransPort`/`DNSPort` lines
+— its own prior block, a manually-added one, or any stray duplicate —
+before writing back exactly one canonical pair. Runs this
+normalization every time regardless of whether its own marker is
+already present, since marker-presence alone was never sufficient to
+guarantee no conflicting line exists elsewhere.
+
+New tests reproducing the exact reported scenario (pre-existing
+unqualified `TransPort 9040`/`DNSPort 53` alongside our marked block)
+and confirming cleanup happens even when the marker is already there.
+Suite: 76/76 passing.
+
 ## 2.2.5 — Fix a real hang risk + a silent global-state bug in check_tor_active
 
 Real-world report: "Start FULL anonymity mode" appeared to hang
