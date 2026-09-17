@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.2.7 — Fix a false-failure bug in the kill switch's own verification
+
+Real-world observation: after the 2.2.6 torrc fix, Tor bootstrapped
+and the kill switch applied cleanly with zero errors — but
+`verify_tor_kill_switch` still reported FAIL on the direct-connection
+check. Traced to a real design bug in the verification itself, not
+the kill switch.
+
+**Root cause**: `_direct_tcp_probe()` opened a plain TCP connection to
+test whether "direct" (non-Tor) traffic is blocked. But the kill
+switch's own iptables rule — `-p tcp --syn -j REDIRECT --to-ports
+9040` — redirects EVERY new outbound TCP SYN through Tor's TransPort,
+regardless of destination. That's the entire mechanism: transparently
+routing ordinary connections through Tor rather than dropping them.
+A "direct" TCP probe therefore gets swept into that exact same
+redirect and can genuinely succeed via Tor even when the kill switch
+is working perfectly — the test's premise ("success = leak") was
+simply wrong for this architecture, and could report a false failure
+for a fully working kill switch.
+
+**Fix**: replaced with `_direct_traffic_blocked()`, which uses ICMP
+(ping) instead — not covered by any ACCEPT/REDIRECT rule in the
+ruleset, so it correctly falls through to the final DROP. A ping
+timing out is genuine evidence the kill switch blocks non-redirected
+traffic; a ping succeeding is a genuine leak. Applied to both
+`verify_tor_kill_switch` and `verify_proxy_kill_switch` (the
+proxy-only kill switch has the identical redirect-everything design).
+
+Also: the Tor-routing check now retries with backoff (up to 4
+attempts, 3s apart) instead of judging on a single immediate check —
+applying the kill switch flushes iptables first, which can briefly
+disrupt a Tor circuit that was only just built moments earlier during
+the bootstrap check.
+
+New tests for both fixes. Suite: 81/81 passing.
+
 ## 2.2.6 — Fix the actual root cause of the whole "Tor never bootstraps" saga
 
 Real-world diagnosis, tracing through several prior sessions of

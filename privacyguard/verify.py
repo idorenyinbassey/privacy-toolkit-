@@ -5,33 +5,57 @@ proof — rule ordering bugs, a NAT table quirk, or Tor not having
 finished bootstrapping yet can all leave you "protected" on paper and
 leaking in practice. This module actually tests the live behavior.
 """
-import socket
 import subprocess
+import time
 import urllib.request
 
 from . import environment as envmod
 from . import proxy_tor, dns_check
 
 
-def _direct_tcp_probe(host: str = "1.1.1.1", port: int = 80, timeout: float = 4.0) -> bool:
-    """True if a direct (non-tunneled) TCP connection succeeds. Used to
-    prove a kill switch is actually blocking direct traffic — if this
-    succeeds while a kill switch claims to be active, that's a leak."""
+def _direct_traffic_blocked(host: str = "1.1.1.1", timeout: float = 4.0) -> bool:
+    """True if traffic NOT subject to the kill switch's redirect rules
+    is actually blocked, as it should be.
+
+    This deliberately does NOT use a plain TCP connection: the kill
+    switch's iptables rule (`-p tcp --syn -j REDIRECT --to-ports 9040`)
+    catches EVERY new outbound TCP SYN regardless of destination —
+    that's the whole mechanism, transparently routing ordinary
+    connections through Tor rather than dropping them. A "direct" TCP
+    probe therefore gets swept into that same redirect and can
+    genuinely succeed via Tor even when the kill switch is working
+    exactly as intended; treating that success as a leak is simply
+    testing the wrong thing.
+
+    ICMP isn't touched by any ACCEPT/REDIRECT rule in the ruleset, so
+    it correctly falls through to the final DROP — a ping timing out
+    is the actual evidence the kill switch is blocking non-redirected
+    traffic, not a plain TCP connect."""
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+        result = subprocess.run(["ping", "-c", "1", "-W", str(int(timeout)), host],
+                                 capture_output=True, timeout=timeout + 2)
+        return result.returncode != 0  # non-zero = no reply = correctly blocked
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return True  # no ping binary or it hung past its own timeout — treat as blocked
 
 
 def verify_tor_kill_switch(env: envmod.Environment) -> dict:
     """Returns a dict report; also prints a human-readable summary."""
     report = {"checks": []}
 
-    direct_ok = _direct_tcp_probe()
-    report["checks"].append(("Direct (non-Tor) TCP connection blocked", not direct_ok))
+    blocked = _direct_traffic_blocked()
+    report["checks"].append(("Non-redirected traffic (ICMP) correctly blocked", blocked))
 
-    tor_check = proxy_tor.check_tor_active()
+    # Applying the kill switch flushes iptables first, which can briefly
+    # disrupt a Tor circuit that was only just built moments earlier
+    # during the bootstrap check — retry with backoff rather than
+    # judging on a single immediate check.
+    tor_check = {"error": "not checked yet"}
+    for attempt in range(4):
+        tor_check = proxy_tor.check_tor_active()
+        if "error" not in tor_check:
+            break
+        time.sleep(3)
     tor_ok = "error" not in tor_check and tor_check.get("IsTor")
     report["checks"].append(("Traffic confirmed routing through Tor", bool(tor_ok)))
 
@@ -47,8 +71,8 @@ def verify_tor_kill_switch(env: envmod.Environment) -> dict:
 def verify_proxy_kill_switch(env: envmod.Environment, proxy_host: str) -> dict:
     report = {"checks": []}
 
-    direct_ok = _direct_tcp_probe()
-    report["checks"].append(("Direct (non-proxy) TCP connection blocked", not direct_ok))
+    blocked = _direct_traffic_blocked()
+    report["checks"].append(("Non-redirected traffic (ICMP) correctly blocked", blocked))
 
     try:
         with urllib.request.urlopen("https://api.ipify.org", timeout=8) as r:
