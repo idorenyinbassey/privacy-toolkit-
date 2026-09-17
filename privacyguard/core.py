@@ -225,19 +225,22 @@ def _ensure_transparent_proxy_torrc(torrc_path: Path = None) -> bool:
 
 def _wait_for_tor_bootstrap(env: envmod.Environment, timeout: int = 30) -> bool:
     from . import proxy_tor as _proxy_tor
-    check = _proxy_tor.check_tor_active()
+    print(f"[*] Checking whether Tor is reachable (up to {timeout}s allowed for it to bootstrap)...")
+    check = _proxy_tor.check_tor_active(timeout=8)
     if "error" not in check:
+        print("[+] Tor is already reachable.")
         return True
-    print(f"[*] Tor not yet reachable — starting it and waiting up to {timeout}s to bootstrap...")
+    print(f"[*] Tor not reachable yet ({check.get('error', 'unknown')}) — (re)starting it and waiting...")
     _proxy_tor.start_tor(env)
     waited = 0
     while waited < timeout:
         time.sleep(2)
         waited += 2
-        check = _proxy_tor.check_tor_active()
+        check = _proxy_tor.check_tor_active(timeout=8)
         if "error" not in check:
-            print(f"[+] Tor bootstrapped and reachable after {waited}s.")
+            print(f"[+] Tor bootstrapped and reachable after ~{waited}s.")
             return True
+        print(f"    ...still waiting ({waited}s/{timeout}s): {check.get('error', 'not ready')}")
     return False
 
 
