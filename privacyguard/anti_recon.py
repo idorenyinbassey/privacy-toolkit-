@@ -103,9 +103,17 @@ def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seco
         ["iptables", "-A", "PG_PORTSCAN", "-m", "recent", "--name", "pg_scan", "--set",
          "-j", "LOG", "--log-prefix", "PrivacyGuard-SCAN-BLOCK: "],
         ["iptables", "-A", "PG_PORTSCAN", "-j", "DROP"],
-        ["iptables", "-I", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
+        # "! -i lo" excludes loopback: this is meant to catch EXTERNAL
+        # scanners, and loopback traffic genuinely traverses INPUT on
+        # Linux — without this exclusion, this tool's own repeated
+        # local connectivity checks (e.g. polling Tor's SocksPort while
+        # waiting for it to bootstrap) count toward the same "new
+        # connections from one source" threshold and can trip this
+        # rule against themselves, dropping the tool's own traffic.
+        ["iptables", "-I", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
          "--update", "--seconds", str(seconds), "--hitcount", str(hitcount), "-j", "PG_PORTSCAN"],
-        ["iptables", "-A", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan", "--set", "-j", "ACCEPT"],
+        ["iptables", "-A", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
+         "--set", "-j", "ACCEPT"],
     ]
     ok = True
     for c in cmds:
@@ -114,8 +122,8 @@ def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seco
             print(f"[!] {' '.join(c)} -> {r.stderr.strip()}")
             ok = False
     if ok:
-        print(f"[+] Portscan protection active: > {hitcount} new connections from one source "
-              f"within {seconds}s gets logged + dropped.")
+        print(f"[+] Portscan protection active: > {hitcount} new connections from one EXTERNAL source "
+              f"within {seconds}s gets logged + dropped (loopback excluded).")
         print("    Tune hitcount/seconds if legitimate traffic trips it.")
         statemod.update(portscan_protection=True, portscan_params={"hitcount": hitcount, "seconds": seconds})
 
@@ -129,10 +137,10 @@ def disable_portscan_protection(env: envmod.Environment) -> None:
     # hardcoded hitcount/seconds here would silently fail to match the
     # rule if it was enabled with different values.
     params = statemod.get("portscan_params") or {"hitcount": 15, "seconds": 60}
-    subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
+    subprocess.run(["iptables", "-D", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
                      "--update", "--seconds", str(params["seconds"]), "--hitcount", str(params["hitcount"]),
                      "-j", "PG_PORTSCAN"], capture_output=True)
-    subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
+    subprocess.run(["iptables", "-D", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn", "-m", "recent", "--name", "pg_scan",
                      "--set", "-j", "ACCEPT"], capture_output=True)
     subprocess.run(["iptables", "-F", "PG_PORTSCAN"], capture_output=True)
     subprocess.run(["iptables", "-X", "PG_PORTSCAN"], capture_output=True)

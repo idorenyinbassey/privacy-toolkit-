@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.2.9 — Fix portscan protection blocking the tool's own Tor bootstrap checks
+
+Real-world diagnosis: after 2.2.8 made the bootstrap wait visible, the
+live output showed a very specific pattern — early attempts got
+`Connection reset by peer` (Tor itself, unstable but responding),
+transitioning cleanly to `timed out` around the 30-second mark and
+staying that way. A `DROP` iptables rule produces exactly silent
+timeouts, and something new started dropping these connections partway
+through the wait.
+
+**Root cause**: `enable_portscan_protection`'s INPUT rule tracked "new
+connections from one source" with no loopback exclusion. Loopback
+traffic (`127.0.0.1 -> 127.0.0.1`) genuinely traverses the INPUT chain
+on Linux. `_wait_for_tor_bootstrap`'s own retry loop polls Tor's
+SocksPort (127.0.0.1:9050) roughly every 2 seconds while waiting —
+after ~15 of the tool's OWN check attempts (the default hitcount),
+the portscan rule started matching and dropping the tool's own
+traffic. A self-inflicted feedback loop: wait longer for Tor -> check
+more times -> exceed the anti-scan threshold -> get blocked by your
+own defense -> Tor looks unreachable even if it's fine.
+
+Fix: the tracking rule now excludes loopback (`! -i lo`), which is
+also just the semantically correct scope for a feature meant to catch
+external scanners, not the tool's own local traffic.
+`disable_portscan_protection`'s removal rule updated to match exactly
+(iptables -D requires an identical spec to find and remove a rule).
+
+**If you're upgrading from an affected version**: the currently-active
+rule in your kernel is still the OLD one — upgrading the code alone
+does not retroactively fix already-applied iptables rules. Disable
+portscan protection (or do a full `sudo iptables -F`) BEFORE
+upgrading, then re-enable after, so the corrected rule actually gets
+applied. See docs/04-troubleshooting.md for the exact commands.
+
+New tests confirming the rule excludes loopback and that disable
+targets the exact same spec. Suite: 84/84 passing.
+
+## 2.2.8 — Make Tor-bootstrap wait visibly tick, and bound the first check
+
+The first `check_tor_active()` call in `_wait_for_tor_bootstrap` ran
+BEFORE the "waiting..." message printed, with the default ~12s
+timeout — so if Tor's SOCKS port was open but slow to answer that
+first check, the program looked frozen right after "Portscan
+protection active" for up to ~12s with zero output, indistinguishable
+from a real hang from the outside.
+
+Fix: prints its intent BEFORE the first check, bounds each check at
+8s explicitly, and prints a live `...still waiting (Ns/timeout)` line
+every loop iteration with the current failure reason. Can no longer
+sit silently — a genuine freeze is now immediately distinguishable
+from normal slow-bootstrap waiting, since real waiting visibly ticks.
+
 ## 2.2.7 — Fix a false-failure bug in the kill switch's own verification
 
 Real-world observation: after the 2.2.6 torrc fix, Tor bootstrapped

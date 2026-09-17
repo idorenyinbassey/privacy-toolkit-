@@ -1,5 +1,47 @@
 # Troubleshooting
 
+## "Tor connection resets, then times out — but only after 20-30 seconds"
+
+**Root cause (fixed in 2.2.9)**: the portscan-protection feature's
+own INPUT rule had no loopback exclusion, so this tool's own repeated
+local checks (polling Tor's SocksPort while waiting for bootstrap)
+could trip its own anti-scan defense after enough attempts — a
+self-inflicted block, not a real network or Tor problem. Recognizable
+by the pattern: early attempts fail with a real response (`Connection
+reset by peer`), later attempts cleanly become `timed out` (silent
+`DROP`) and never recover.
+
+**Upgrading from an affected version needs one extra step**: the rule
+already sitting in your kernel is the OLD one — updating the code
+alone doesn't retroactively change rules already applied by iptables.
+Do this BEFORE pulling the upgrade, or the old broken rule stays
+active even on the new code:
+```bash
+sudo privacyguard
+> 8   (anti-recon: portscan auto-block)
+disable
+```
+Or, if that won't respond because you're still blocked:
+```bash
+sudo iptables -F
+sudo iptables -t nat -F
+sudo iptables -P INPUT ACCEPT
+sudo iptables -P OUTPUT ACCEPT
+sudo iptables -P FORWARD ACCEPT
+rm ~/.privacyguard_state.json
+```
+The state file removal matters here too — without it, this tool still
+believes portscan protection (and possibly other things) are already
+active from before the manual flush, and will refuse to re-apply them
+correctly. Deleting it just resets to defaults; nothing else is lost.
+
+Then upgrade and start fresh:
+```bash
+git pull
+pipx install ".[full]" --force
+sudo privacyguard
+```
+
 ## "Tor never bootstraps, or crash-loops instead of starting"
 
 **Root cause (fixed in 2.2.6)**: `/etc/tor/torrc` had two conflicting
