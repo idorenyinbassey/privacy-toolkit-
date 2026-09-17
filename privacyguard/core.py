@@ -276,8 +276,10 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_t
     # stuck with no path out at all.
     torrc_changed = _ensure_transparent_proxy_torrc()
     if torrc_changed and envmod.have("systemctl"):
-        print("[*] Restarting tor to apply the updated torrc...")
-        subprocess.run(["systemctl", "restart", "tor"], capture_output=True)
+        from . import proxy_tor as _proxy_tor
+        unit = _proxy_tor._resolve_tor_systemd_unit()
+        print(f"[*] Restarting {unit} to apply the updated torrc...")
+        subprocess.run(["systemctl", "restart", unit], capture_output=True)
         time.sleep(2)
 
     if not _wait_for_tor_bootstrap(env, timeout=bootstrap_timeout):

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.2.10 — Fix targeting the wrong systemd unit (stub vs real Tor daemon)
+
+Real-world diagnosis: after the portscan-loopback fix (2.2.9), the
+bootstrap wait showed consistent `Connection reset by peer` /
+`Connection closed unexpectedly` for the entire wait, never resolving
+to a working connection — a live, unstable Tor-level problem, not a
+firewall one. Investigation found TWO compounding causes:
+
+1. **An orphaned foreground Tor process** — a manual `sudo -u
+   debian-tor tor -f /etc/tor/torrc` test run from earlier troubleshooting
+   was never actually killed, silently squatting on ports 9050/9040/5353
+   in the background the whole time.
+2. **The bigger, structural bug**: Debian/Kali's tor package uses a
+   multi-instance systemd setup where `tor.service` is a stub master
+   unit (`ExecStart=/bin/true`, existing only for ordering) while the
+   real daemon runs under `tor@default.service`. Every
+   `systemctl start/stop/restart tor` call in this codebase — in
+   `start_tor()`, `stop_tor()`, and `enable_kill_switch()`'s
+   "restart tor to apply torrc" step — was targeting the harmless
+   stub. The real running daemon was never actually being controlled
+   by any of this tool's start/stop/restart calls on affected systems.
+
+Fix: `_resolve_tor_systemd_unit()` (proxy_tor.py) detects whether
+`tor@default.service` exists via `systemctl list-unit-files` and uses
+that as the actual target for every start/stop/restart call instead
+of assuming `tor.service` is the real unit; falls back to plain `tor`
+on systems where that genuinely is the real daemon (non-Debian/Kali
+setups). Resolved once per process and cached.
+
+New tests covering unit resolution (both branches, error fallback,
+caching) and confirming start_tor/stop_tor target the resolved unit,
+not a hardcoded "tor". Suite: 90/90 passing.
+
 ## 2.2.9 — Fix portscan protection blocking the tool's own Tor bootstrap checks
 
 Real-world diagnosis: after 2.2.8 made the bootstrap wait visible, the

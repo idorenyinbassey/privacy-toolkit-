@@ -1,5 +1,41 @@
 # Troubleshooting
 
+## "Tor connection resets/closes repeatedly, never stabilizes"
+
+**Root cause (fixed in 2.2.10)**: two compounding issues, both worth
+checking directly rather than guessing:
+
+1. **An orphaned Tor process from manual troubleshooting** — if you've
+   ever run `sudo -u debian-tor tor -f /etc/tor/torrc` by hand (e.g.
+   to test bootstrap directly) and just closed the terminal or hit
+   Ctrl+C without confirming it actually exited, that process can keep
+   running in the background indefinitely, silently holding the ports
+   this tool needs. Check:
+   ```bash
+   ps aux | grep -i tor
+   ```
+   If you see more than one `tor` process, kill them all and restart
+   clean:
+   ```bash
+   sudo systemctl stop tor
+   sudo pkill -9 -x tor
+   sudo ss -tlnp | grep -E "9050|9040|5353"   # should print nothing
+   sudo systemctl start tor
+   ```
+
+2. **Debian/Kali's multi-instance Tor packaging**: `tor.service` is
+   often just a stub unit (`ExecStart=/bin/true`) that does nothing —
+   the real daemon runs under `tor@default.service`. Confirm which is
+   which on your system:
+   ```bash
+   systemctl list-units --all 'tor*'
+   ```
+   Look for `tor@default.service` with SUB state `running` — that's
+   the real one. If `tor.service` shows `exited` and `tor@default`
+   shows `running`, you're on the multi-instance setup, and versions
+   before 2.2.10 were silently controlling the wrong unit on every
+   start/stop/restart. Current versions detect this automatically.
+
 ## "Tor connection resets, then times out — but only after 20-30 seconds"
 
 **Root cause (fixed in 2.2.9)**: the portscan-protection feature's

@@ -24,6 +24,31 @@ from . import environment as envmod
 # Tor process control
 # --------------------------------------------------------------------
 
+_TOR_UNIT_CACHE = None
+
+
+def _resolve_tor_systemd_unit() -> str:
+    """Debian/Kali's tor package often uses a multi-instance systemd
+    setup where 'tor.service' is just a stub master unit (commonly
+    ExecStart=/bin/true, existing only for ordering) while the actual
+    daemon runs under 'tor@default.service'. Targeting the stub with
+    start/stop/restart silently does nothing to the real process —
+    detect which one actually exists and controls the real daemon."""
+    global _TOR_UNIT_CACHE
+    if _TOR_UNIT_CACHE is not None:
+        return _TOR_UNIT_CACHE
+    unit = "tor"
+    try:
+        result = subprocess.run(["systemctl", "list-unit-files", "tor@default.service"],
+                                 capture_output=True, text=True, timeout=5)
+        if "tor@default.service" in result.stdout:
+            unit = "tor@default"
+    except Exception:
+        pass
+    _TOR_UNIT_CACHE = unit
+    return unit
+
+
 def start_tor(env: envmod.Environment) -> bool:
     if not env.has_tor:
         print("[!] tor is not installed.")
@@ -34,7 +59,8 @@ def start_tor(env: envmod.Environment) -> bool:
         if env.termux:
             subprocess.Popen(["tor"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            subprocess.run(["systemctl", "start", "tor"], check=False)
+            unit = _resolve_tor_systemd_unit()
+            subprocess.run(["systemctl", "start", unit], check=False)
             subprocess.run(["service", "tor", "start"], check=False)
         print("[+] Tor start requested — allow ~10s to bootstrap.")
         return True
@@ -48,7 +74,8 @@ def stop_tor(env: envmod.Environment) -> None:
         if env.termux:
             subprocess.run(["pkill", "-x", "tor"], check=False)
         else:
-            subprocess.run(["systemctl", "stop", "tor"], check=False)
+            unit = _resolve_tor_systemd_unit()
+            subprocess.run(["systemctl", "stop", unit], check=False)
             subprocess.run(["service", "tor", "stop"], check=False)
         print("[+] Tor stop requested.")
     except Exception as e:
