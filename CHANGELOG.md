@@ -1,5 +1,69 @@
 # Changelog
 
+## 2.2.11 — Architecture consolidation: shared kill-switch helper, state-file race fix, consistent return contracts
+
+A code-review pass across the whole toolkit (not triggered by a bug
+report this time) found several places where the same logic had been
+copy-pasted with small, accumulating drift between the copies — plus
+two genuine bugs found along the way. No documented feature's
+behavior changes; every existing test still passes unmodified.
+
+**Shared ruleset-apply helper.** `core.enable_kill_switch`,
+`proxy_only.enable_proxy_kill_switch`, and `gateway.enable_gateway`
+each reimplemented the same "back up the current rules, apply a list
+of iptables rules, roll back and report failure if any of them fail"
+sequence — three copies that a future correctness fix (like 2.2.7's
+ICMP-vs-TCP verification fix, or 2.2.9's loopback exclusion) would
+have had to be manually ported to all three, with no guarantee that
+would actually happen. New `firewall_backup.apply_ruleset()` is the
+one implementation all three now call; rule lists and observable
+behavior are unchanged.
+
+**Fixed: state.py could lose an update under concurrent access.** The
+GUI runs every button's action in its own background thread — nothing
+stopped two of them (e.g. enabling the kill switch and enabling
+portscan protection from two close-together clicks) from racing on
+`state.json`'s load-modify-save cycle and silently dropping one of the
+two updates. That's exactly the "no memory of what was already
+active" failure state.py was written to prevent in the first place,
+just triggered by concurrency instead of a crash. Fixed with a
+`threading.Lock` around load/update/save, plus an atomic (temp-file +
+`os.replace`) write so a concurrent reader never sees a half-written
+file either.
+
+**Fixed: `--verify` silently checked less than menu option 24.** Both
+ran the same tor-vs-proxy-vs-none dispatch logic, copy-pasted into
+main.py twice — except only the menu copy also called
+`verify_ipv6_blocked()` when IPv6 blocking was active; the `--verify`
+flag never did, purely because the second copy-paste never picked up
+that line. Both call sites now use one shared `verify.verify_active()`.
+
+**Consistent success/failure contracts.** `core.enable_kill_switch`
+and `proxy_only.enable_proxy_kill_switch` have returned `bool` since
+2.2.2 specifically so callers could tell "applied" from "correctly
+declined" apart without parsing printed text. `anti_recon.
+enable_stealth_sysctls`, `anti_recon.enable_portscan_protection`,
+`core.block_ipv6`, and `gateway.enable_gateway` never got the same
+treatment and silently returned `None` either way. All four now
+follow the identical contract; `orchestrate.full_start` reports
+(without gating on — these remain best-effort hardening, not a gate
+on the kill switch) a sysctls/portscan failure the same way it
+already reports a declined kill switch.
+
+**Minor dedup.** `core.get_dns_servers()` and
+`dns_check.configured_resolvers()` were byte-identical
+`/etc/resolv.conf` parsers living in two different files;
+`core.get_dns_servers` now delegates to `dns_check.configured_resolvers`.
+main.py's four "paste lines until blank line" prompts (bridges, proxy
+lines, a saved profile's proxies/bridges) and five "enable or
+disable?" prompts (a couple of which were case-sensitive while the
+rest weren't) are now `_read_lines()`/`_prompt_enable()` helpers
+instead of five and four separately-typed-out copies.
+
+New tests for the helper extraction, the state-file race (concurrent
+threads hammering `state.update()`), and every new return contract.
+Suite: 128/128 passing (90 pre-existing + 38 new).
+
 ## 2.2.10 — Fix targeting the wrong systemd unit (stub vs real Tor daemon)
 
 Real-world diagnosis: after the portscan-loopback fix (2.2.9), the

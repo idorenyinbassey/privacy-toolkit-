@@ -63,30 +63,33 @@ def _write_gateway_torrc_snippet(internal_ip: str, torrc_path: Path = None) -> N
 
 
 def enable_gateway(env: envmod.Environment, internal_iface: str, internal_ip: str,
-                    external_iface: str = None, force: bool = False) -> None:
+                    external_iface: str = None, force: bool = False) -> bool:
+    """Returns True only if gateway mode ended up genuinely active
+    (including "was already active") — False if declined due to a
+    missing prerequisite, a conflict, or a rule-application failure —
+    same success/failure contract as core.enable_kill_switch and
+    proxy_only.enable_proxy_kill_switch."""
     if env.termux:
         print("[!] Gateway mode needs root/netfilter — unavailable in Termux.")
-        return
+        return False
     if not env.root or not env.has_iptables:
         print("[!] Gateway mode requires root + iptables.")
-        return
+        return False
     if not env.has_tor:
         print("[!] Tor not installed on this VM — it must run Tor to act as the gateway.")
-        return
+        return False
 
     st = statemod.load()
     if st["gateway_mode_active"] and not force:
         print("[i] Gateway mode already active (per saved state). Disable it first, "
               "or call with force=True to re-apply.")
-        return
+        return True  # already genuinely active, not a failure
     if st["tor_kill_switch"] or st["proxy_only_kill_switch"]:
         print("[!] A single-machine kill switch is active on this VM — disable it first. "
               "Gateway mode manages its own OUTPUT rules for this VM's own traffic.")
-        return
+        return False
 
     _write_gateway_torrc_snippet(internal_ip)
-
-    backups = firewall_backup.backup_rules(env, label="pre-gateway-mode")
 
     rules = [
         # This VM's OWN traffic also goes through Tor only (reuses the
@@ -123,17 +126,9 @@ def enable_gateway(env: envmod.Environment, internal_iface: str, internal_ip: st
     ]
     print(f"[*] Configuring gateway mode: internal={internal_iface} ({internal_ip}), "
           f"external={external_iface or '(unspecified — only need it for reference, not for these rules)'}")
-    ok = True
-    for rule in rules:
-        try:
-            subprocess.run(rule, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"[!] Rule failed: {' '.join(rule)} -> {e}")
-            ok = False
+    ok, backups = firewall_backup.apply_ruleset(env, rules, label="pre-gateway-mode")
     if not ok:
-        print("[!] Gateway rule application had errors — restoring pre-existing rules.")
-        firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
-        return
+        return False
 
     # IPv6: block forwarding entirely rather than try to transparently
     # proxy it (Tor's transparent-proxy support here is IPv4-focused).
@@ -153,6 +148,7 @@ def enable_gateway(env: envmod.Environment, internal_iface: str, internal_ip: st
                      gateway_config={"internal_iface": internal_iface, "internal_ip": internal_ip,
                                      "external_iface": external_iface})
     coremod.block_ipv6(env)
+    return True
 
 
 def disable_gateway(env: envmod.Environment) -> None:

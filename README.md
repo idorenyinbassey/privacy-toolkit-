@@ -16,7 +16,9 @@ reference below.
 privacyguard/
   environment.py   - detects Termux vs full Linux, root, installed tools
   state.py         - persistent state tracking (what's actually active right now)
-  firewall_backup.py - iptables/ip6tables backup+restore before any destructive flush
+  firewall_backup.py - iptables/ip6tables backup+restore before any destructive
+                      flush, and the shared apply-ruleset-with-rollback helper
+                      every kill switch (Tor, proxy-only, gateway) builds on
   core.py          - MAC/hostname randomization, Tor kill switch, trace cleanup
   proxy_tor.py     - Tor control, circuit rotation, bridges, proxychains (Tor optional)
   proxy_only.py    - system-wide routing through a plain proxy, NO Tor (redsocks, auth supported)
@@ -35,7 +37,7 @@ privacyguard/
   orchestrate.py   - shared "full start/stop" logic used by both CLI and GUI
 main.py            - CLI (interactive menu + flags)
 gui.py             - Tkinter desktop GUI (full Linux VM/standalone; not Termux)
-tests/             - pytest suite (37 tests, no root/network needed to run)
+tests/             - pytest suite (128 tests, no root/network needed to run)
 docs/              - task-oriented wiki (start here if you're new)
 pyproject.toml, requirements.txt - packaging
 ```

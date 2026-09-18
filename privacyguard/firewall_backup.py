@@ -80,6 +80,42 @@ def restore_rules(env: envmod.Environment, ipv4_path: str = None, ipv6_path: str
         _open_default_v6(env)
 
 
+def apply_ruleset(env: envmod.Environment, rules: list, label: str, tolerate: tuple = ()) -> tuple:
+    """Shared by every kill switch (Tor, proxy-only, gateway): back up
+    the current rules, then apply each rule in `rules` (a list of
+    iptables/ip6tables argv lists) in order, continuing through the
+    whole list even if one fails so every rule gets a chance to report
+    its own error before any rollback decision is made — matching the
+    per-module behavior this replaces.
+
+    A rule that fails with stderr containing one of `tolerate` (e.g.
+    "Chain already exists", for an idempotent `-N` chain-creation step)
+    is treated as a harmless no-op, not a failure. Any other failure
+    means the whole ruleset gets rolled back to the pre-existing backup
+    once every rule has been attempted, rather than leaving a
+    half-applied firewall — the caller should NOT call restore_rules
+    again on a False return, that's already been done here.
+
+    Returns (ok, backups); backups is always the {'ipv4':, 'ipv6':}
+    dict from backup_rules regardless of ok, so a caller on the
+    success path can record it in state.py without a second backup."""
+    backups = backup_rules(env, label=label)
+    ok = True
+    for rule in rules:
+        result = subprocess.run(rule, capture_output=True, text=True)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if tolerate and any(marker in stderr for marker in tolerate):
+                continue
+            print(f"[!] Rule failed: {' '.join(rule)} -> {stderr or result.returncode}")
+            ok = False
+    if not ok:
+        print("[!] Rule application had errors — restoring pre-existing rules rather than "
+              "leaving a half-applied firewall.")
+        restore_rules(env, backups["ipv4"], backups["ipv6"])
+    return ok, backups
+
+
 def _open_default_v4():
     subprocess.run(["iptables", "-F"], capture_output=True)
     subprocess.run(["iptables", "-t", "nat", "-F"], capture_output=True)

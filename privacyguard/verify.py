@@ -11,6 +11,7 @@ import urllib.request
 
 from . import environment as envmod
 from . import proxy_tor, dns_check
+from . import state as statemod
 
 
 def _direct_traffic_blocked(host: str = "1.1.1.1", timeout: float = 4.0) -> bool:
@@ -105,6 +106,29 @@ def verify_ipv6_blocked(env: envmod.Environment) -> dict:
         report["checks"].append((f"Could not read ip6tables policy ({e})", False))
     report["passed"] = all(ok for _, ok in report["checks"])
     _print_report("IPv6 block", report)
+    return report
+
+
+def verify_active(env: envmod.Environment) -> dict:
+    """Verifies whichever kill switch (if any) is marked active per
+    saved state, plus the IPv6 block if that's active too. The single
+    entry point both the CLI's interactive menu (option 24) and its
+    --verify flag use, so "verify what's currently active" can't
+    quietly mean two different things depending on which one you run
+    — the --verify flag used to skip the IPv6 check that the menu
+    option always ran, simply because the same dispatch logic had been
+    copy-pasted into main.py twice and only one copy had it."""
+    st = statemod.load()
+    report = {}
+    if st["tor_kill_switch"]:
+        report["kill_switch"] = verify_tor_kill_switch(env)
+    elif st["proxy_only_kill_switch"]:
+        host = (st.get("active_proxy") or "://").split("://")[-1].split(":")[0]
+        report["kill_switch"] = verify_proxy_kill_switch(env, host)
+    else:
+        print("[i] No kill switch marked active per saved state — nothing to verify.")
+    if st["ipv6_blocked"]:
+        report["ipv6"] = verify_ipv6_blocked(env)
     return report
 
 

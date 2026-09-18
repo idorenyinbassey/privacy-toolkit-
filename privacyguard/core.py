@@ -7,6 +7,7 @@ from pathlib import Path
 from . import environment as envmod
 from . import state as statemod
 from . import firewall_backup
+from . import dns_check
 
 TOR_UID_PLACEHOLDER = "debian-tor"
 
@@ -118,18 +119,23 @@ def randomize_hostname(env: envmod.Environment) -> None:
             print(f"[!] Failed to set hostname: {e}")
 
 
-def block_ipv6(env: envmod.Environment) -> None:
+def block_ipv6(env: envmod.Environment) -> bool:
     """AnonSurf-style IPv6 leak protection: IPv6 has historically been
     able to leak around IPv4-only iptables kill switches, and can also
     carry a permanent MAC-derived address. Block it outright while a
     kill switch is active. Idempotent — a no-op if already blocked
-    per saved state."""
+    per saved state. Returns True if IPv6 ended up blocked (including
+    "already was") — False if declined due to a missing prerequisite
+    or a rule failure. Callers treat this as best-effort on top of an
+    already-successful IPv4 kill switch, not a gate on it — check the
+    return value if you need to know whether IPv6 is genuinely
+    covered."""
     if env.termux or not env.root or not env.has_ip6tables:
         print("[!] IPv6 blocking needs root + ip6tables (full Linux only) — skipped.")
-        return
+        return False
     if statemod.get("ipv6_blocked"):
         print("[i] IPv6 already blocked (per saved state) — skipping.")
-        return
+        return True
     try:
         subprocess.run(["ip6tables", "-F"], check=True)
         subprocess.run(["ip6tables", "-P", "INPUT", "DROP"], check=True)
@@ -139,8 +145,10 @@ def block_ipv6(env: envmod.Environment) -> None:
         subprocess.run(["ip6tables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"], check=True)
         print("[+] IPv6 blocked (prevents IPv6 traffic leaking around the IPv4-only kill switch).")
         statemod.update(ipv6_blocked=True)
+        return True
     except subprocess.CalledProcessError as e:
         print(f"[!] Failed to block IPv6: {e}")
+        return False
 
 
 def unblock_ipv6(env: envmod.Environment) -> None:
@@ -291,8 +299,6 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_t
               "stuck rather than just slow.")
         return False
 
-    backups = firewall_backup.backup_rules(env, label="pre-tor-killswitch")
-
     rules = [
         ["iptables", "-F"], ["iptables", "-t", "nat", "-F"],
         ["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
@@ -304,21 +310,11 @@ def enable_kill_switch(env: envmod.Environment, force: bool = False, bootstrap_t
         ["iptables", "-A", "OUTPUT", "-j", "DROP"],
     ]
     print("[*] Applying kill-switch rules. Requires torrc: TransPort 9040 / DNSPort 5353.")
-    ok = True
-    for rule in rules:
-        try:
-            subprocess.run(rule, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"[!] Rule failed: {' '.join(rule)} -> {e}")
-            ok = False
-    if ok:
-        print("[+] Kill switch active — only loopback + Tor traffic allowed out.")
-        statemod.update(tor_kill_switch=True, iptables_backup=backups["ipv4"], ip6tables_backup=backups["ipv6"])
-    else:
-        print("[!] Kill switch application had errors — restoring pre-existing rules rather than "
-              "leaving a half-applied firewall.")
-        firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
+    ok, backups = firewall_backup.apply_ruleset(env, rules, label="pre-tor-killswitch")
+    if not ok:
         return False
+    print("[+] Kill switch active — only loopback + Tor traffic allowed out.")
+    statemod.update(tor_kill_switch=True, iptables_backup=backups["ipv4"], ip6tables_backup=backups["ipv6"])
     block_ipv6(env)
     return True
 
@@ -374,13 +370,6 @@ def get_public_ip() -> str:
 
 
 def get_dns_servers() -> list:
-    servers = []
-    resolv = Path("/etc/resolv.conf")
-    if resolv.exists():
-        try:
-            for line in resolv.read_text().splitlines():
-                if line.strip().startswith("nameserver"):
-                    servers.append(line.split()[1])
-        except Exception:
-            pass
-    return servers
+    """Same /etc/resolv.conf parsing as dns_check.configured_resolvers()
+    — delegates there so the two don't drift out of sync."""
+    return dns_check.configured_resolvers()

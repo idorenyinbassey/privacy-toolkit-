@@ -12,12 +12,30 @@ This module is the fix: a single JSON file recording exactly what
 PrivacyGuard has turned on, plus enough detail (backup paths, the
 exact parameters used) to reverse each action precisely rather than
 approximately.
+
+The GUI runs every button's action in its own background thread
+(gui.py's _run_bg), so two enable/disable actions triggered close
+together can genuinely race on this file from within the same
+process — e.g. enabling the kill switch and enabling portscan
+protection at nearly the same time are two independent
+load-modify-save cycles on the same JSON file. A plain read-then-write
+with no lock can lose one of the two updates (last writer wins,
+silently dropping the other thread's field changes) — exactly the
+"no memory of what was already active" failure mode this module
+exists to prevent, just triggered by concurrency instead of a crash.
+A module-level lock serializes load/update/save within this process;
+writing via a temp file + os.replace() makes each save atomic, so a
+concurrent reader (in this process or another) never sees a
+half-written file either.
 """
 import json
+import os
+import threading
 import time
 from pathlib import Path
 
 STATE_FILE = Path.home() / ".privacyguard_state.json"
+_LOCK = threading.Lock()
 
 DEFAULT_STATE = {
     "tor_kill_switch": False,
@@ -42,7 +60,7 @@ DEFAULT_STATE = {
 }
 
 
-def load() -> dict:
+def _load_unlocked() -> dict:
     if STATE_FILE.exists():
         try:
             data = json.loads(STATE_FILE.read_text())
@@ -54,16 +72,37 @@ def load() -> dict:
     return dict(DEFAULT_STATE)
 
 
-def save(state: dict) -> None:
+def _save_unlocked(state: dict) -> None:
     state["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    # Write to a temp file in the same directory, then rename over the
+    # real one — os.replace() is atomic on POSIX, so a concurrent
+    # reader (this process or another) always sees either the old
+    # complete file or the new one, never a partially-written one.
+    tmp_path = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(state, indent=2))
+    os.replace(tmp_path, STATE_FILE)
+
+
+def load() -> dict:
+    with _LOCK:
+        return _load_unlocked()
+
+
+def save(state: dict) -> None:
+    with _LOCK:
+        _save_unlocked(state)
 
 
 def update(**kwargs) -> dict:
-    state = load()
-    state.update(kwargs)
-    save(state)
-    return state
+    """Read-modify-write under a single lock acquisition — calling
+    load() and save() separately here would reopen the exact race this
+    function exists to close, since another thread could update() in
+    between the two calls."""
+    with _LOCK:
+        state = _load_unlocked()
+        state.update(kwargs)
+        _save_unlocked(state)
+        return state
 
 
 def get(key, default=None):

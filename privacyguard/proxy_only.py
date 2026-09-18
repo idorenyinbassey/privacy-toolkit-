@@ -103,8 +103,6 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
               "(both rewrite the same OUTPUT chain and will conflict).")
         return False
 
-    backups = firewall_backup.backup_rules(env, label="pre-proxy-killswitch")
-
     generate_redsocks_conf(proxy_host, proxy_port, proxy_type, username, password)
     started = subprocess.run(["systemctl", "restart", "redsocks"], capture_output=True)
     if started.returncode != 0:
@@ -118,21 +116,14 @@ def enable_proxy_kill_switch(env: envmod.Environment, proxy_host: str, proxy_por
          "--to-ports", str(REDSOCKS_LOCAL_PORT)],
         ["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "-j", "PG_REDSOCKS"],
     ]
-    ok = True
-    for r in rules:
-        res = subprocess.run(r, capture_output=True, text=True)
-        if res.returncode != 0 and "Chain already exists" not in res.stderr:
-            print(f"[!] {' '.join(r)} -> {res.stderr.strip()}")
-            ok = False
-    if ok:
-        print(f"[+] All outbound TCP now routed through {proxy_host}:{proxy_port} — no Tor in the path.")
-        print("[!] UDP/DNS is NOT covered by this. Run the DNS leak check next.")
-        statemod.update(proxy_only_kill_switch=True, nat_iptables_backup=backups["ipv4"],
-                         ip6tables_backup=backups["ipv6"], active_proxy=f"{proxy_type}://{proxy_host}:{proxy_port}")
-    else:
-        print("[!] Rule application had errors — restoring pre-existing rules.")
-        firewall_backup.restore_rules(env, backups["ipv4"], backups["ipv6"])
+    ok, backups = firewall_backup.apply_ruleset(env, rules, label="pre-proxy-killswitch",
+                                                 tolerate=("Chain already exists",))
+    if not ok:
         return False
+    print(f"[+] All outbound TCP now routed through {proxy_host}:{proxy_port} — no Tor in the path.")
+    print("[!] UDP/DNS is NOT covered by this. Run the DNS leak check next.")
+    statemod.update(proxy_only_kill_switch=True, nat_iptables_backup=backups["ipv4"],
+                     ip6tables_backup=backups["ipv6"], active_proxy=f"{proxy_type}://{proxy_host}:{proxy_port}")
     coremod.block_ipv6(env)
     return True
 
