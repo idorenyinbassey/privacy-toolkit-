@@ -18,6 +18,29 @@ LOGGER = crypto_log.EncryptedLogger()
 _monitor_handle = {"instance": None}
 
 
+def _read_lines(prompt: str = None) -> list:
+    """The recurring 'paste N lines, empty line to finish' pattern —
+    bridges (11), proxy lines (12), and a saved profile's proxies/
+    bridges (26) all read input the same way."""
+    if prompt:
+        print(prompt)
+    lines = []
+    while True:
+        line = input()
+        if not line:
+            break
+        lines.append(line)
+    return lines
+
+
+def _prompt_enable() -> bool:
+    """The recurring 'enable or disable?' guard prompt (options 6, 7,
+    8, 13, 29) — True means enable, anything else (including a blank
+    line) means disable. Case-insensitive, unlike a couple of the
+    inline checks this replaces."""
+    return input("enable or disable? [enable/disable]: ").strip().lower() == "enable"
+
+
 def menu(env: envmod.Environment) -> None:
     while True:
         print("\n=== PrivacyGuard v2 ===")
@@ -72,16 +95,16 @@ def menu(env: envmod.Environment) -> None:
                 core.randomize_mac(env, iface)
             core.randomize_hostname(env)
         elif c == "6":
-            if input("enable or disable? [enable/disable]: ").strip() == "enable":
+            if _prompt_enable():
                 bt = input("seconds to wait for Tor to bootstrap [45]: ").strip()
                 core.enable_kill_switch(env, bootstrap_timeout=int(bt) if bt else 45)
             else:
                 core.disable_kill_switch(env)
         elif c == "7":
-            (anti_recon.enable_stealth_sysctls if input("enable/disable: ").strip() == "enable"
+            (anti_recon.enable_stealth_sysctls if _prompt_enable()
              else anti_recon.disable_stealth_sysctls)(env)
         elif c == "8":
-            (anti_recon.enable_portscan_protection if input("enable/disable: ").strip() == "enable"
+            (anti_recon.enable_portscan_protection if _prompt_enable()
              else anti_recon.disable_portscan_protection)(env)
         elif c == "9":
             secs = input("watch duration seconds [120]: ").strip()
@@ -91,31 +114,18 @@ def menu(env: envmod.Environment) -> None:
             path = input("path to access log: ").strip()
             anti_recon.watch_http_access_log(path)
         elif c == "11":
-            print("Paste bridge lines (from https://bridges.torproject.org), empty line to finish:")
-            lines = []
-            while True:
-                l = input()
-                if not l:
-                    break
-                lines.append(l)
+            lines = _read_lines("Paste bridge lines (from https://bridges.torproject.org), empty line to finish:")
             proxy_tor.configure_bridges(env, lines)
         elif c == "12":
-            proxies = []
-            print("Paste proxy lines (e.g. 'socks5 203.0.113.5 1080' or 'socks5 203.0.113.5 1080 user pass'),")
-            print("empty line to finish:")
-            while True:
-                l = input()
-                if not l:
-                    break
-                proxies.append(l)
+            proxies = _read_lines("Paste proxy lines (e.g. 'socks5 203.0.113.5 1080' or "
+                                   "'socks5 203.0.113.5 1080 user pass'), empty line to finish:")
             mode = input("chain mode [dynamic/strict/random] (default dynamic): ").strip() or "dynamic"
             include_tor = input("include Tor in the chain? [y/N] (N = proxy-only, better against Tor-blocking hosts): ").strip().lower() == "y"
             proxy_tor.generate_proxychains_conf(env, proxies, chain_mode=mode, include_tor=include_tor)
             if input("test it now? [y/N]: ").strip().lower() == "y":
                 proxy_tor.test_proxychains(env)
         elif c == "13":
-            action = input("enable or disable? [enable/disable]: ").strip()
-            if action == "enable":
+            if _prompt_enable():
                 host = input("proxy host/IP: ").strip()
                 port = int(input("proxy port: ").strip())
                 ptype = input("proxy type [socks5/socks4/http-connect] (default socks5): ").strip() or "socks5"
@@ -183,16 +193,7 @@ def menu(env: envmod.Environment) -> None:
         elif c == "23":
             print(statemod.summary())
         elif c == "24":
-            st = statemod.load()
-            if st["tor_kill_switch"]:
-                verify.verify_tor_kill_switch(env)
-            elif st["proxy_only_kill_switch"]:
-                host = (st.get("active_proxy") or "://").split("://")[-1].split(":")[0]
-                verify.verify_proxy_kill_switch(env, host)
-            else:
-                print("[i] No kill switch marked active per saved state — nothing to verify.")
-            if st["ipv6_blocked"]:
-                verify.verify_ipv6_blocked(env)
+            verify.verify_active(env)
         elif c == "25":
             kind = input("openvpn or wireguard? [openvpn/wireguard]: ").strip().lower()
             action = input("start or stop? [start/stop]: ").strip().lower()
@@ -215,20 +216,8 @@ def menu(env: envmod.Environment) -> None:
                 print("Saved profiles: " + (", ".join(names) if names else "(none)"))
             elif sub == "save":
                 name = input("profile name: ").strip()
-                proxies = []
-                print("Proxy lines (empty line to finish):")
-                while True:
-                    l = input()
-                    if not l:
-                        break
-                    proxies.append(l)
-                bridges = []
-                print("Bridge lines (empty line to finish):")
-                while True:
-                    l = input()
-                    if not l:
-                        break
-                    bridges.append(l)
+                proxies = _read_lines("Proxy lines (empty line to finish):")
+                bridges = _read_lines("Bridge lines (empty line to finish):")
                 pw = input("passphrase to encrypt this profile: ")
                 profiles.save_profile(name, {"proxies": proxies, "bridges": bridges}, pw)
             elif sub == "load":
@@ -273,8 +262,7 @@ def menu(env: envmod.Environment) -> None:
             else:
                 print("Unknown hypervisor.")
         elif c == "29":
-            action = input("enable or disable? [enable/disable]: ").strip()
-            if action == "enable":
+            if _prompt_enable():
                 iface = input(f"internal interface [{env.interfaces[0] if env.interfaces else 'eth1'}]: ").strip() \
                     or (env.interfaces[0] if env.interfaces else "eth1")
                 ip = input(f"internal IP [{gateway_topology.DEFAULT_GATEWAY_INTERNAL_IP}]: ").strip() \
@@ -349,14 +337,7 @@ def main():
     elif args.state:
         print(statemod.summary())
     elif args.verify:
-        st = statemod.load()
-        if st["tor_kill_switch"]:
-            verify.verify_tor_kill_switch(env)
-        elif st["proxy_only_kill_switch"]:
-            host = (st.get("active_proxy") or "://").split("://")[-1].split(":")[0]
-            verify.verify_proxy_kill_switch(env, host)
-        else:
-            print("[i] No kill switch marked active per saved state — nothing to verify.")
+        verify.verify_active(env)
     elif args.start:
         orchestrate.full_start(env, bootstrap_timeout=args.bootstrap_timeout,
                                 randomize_identity=not args.no_randomize_identity)

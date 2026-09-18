@@ -46,23 +46,32 @@ def _read_sysctl(key: str) -> str:
         return None
 
 
-def enable_stealth_sysctls(env: envmod.Environment) -> None:
+def enable_stealth_sysctls(env: envmod.Environment) -> bool:
+    """Returns True if every hardening sysctl applied (or it was
+    already applied per saved state) — False if declined due to a
+    missing prerequisite, or if one or more keys failed to set. Either
+    way this is best-effort: state is still marked applied even on a
+    partial failure, since whichever keys DID apply are genuinely in
+    effect and disable should still restore all of them."""
     if env.termux or not env.root or not env.has_sysctl:
         print("[!] Sysctl fingerprint hardening needs root + full Linux — skipped.")
-        return
+        return False
     if statemod.get("stealth_sysctls"):
         print("[i] Stealth sysctls already applied (per saved state) — skipping.")
-        return
+        return True
     # Record the EXACT previous values so disable restores reality,
     # not a guessed-at "typical default".
     previous = {key: _read_sysctl(key) for key in STEALTH_SYSCTLS}
+    all_ok = True
     for key, val in STEALTH_SYSCTLS.items():
         try:
             subprocess.run(["sysctl", "-w", f"{key}={val}"], check=True, capture_output=True)
             print(f"[+] {key} = {val}")
         except subprocess.CalledProcessError as e:
             print(f"[!] Failed to set {key}: {e}")
+            all_ok = False
     statemod.update(stealth_sysctls=True, stealth_sysctls_backup=previous)
+    return all_ok
 
 
 def disable_stealth_sysctls(env: envmod.Environment) -> None:
@@ -85,18 +94,21 @@ def disable_stealth_sysctls(env: envmod.Environment) -> None:
 # --------------------------------------------------------------------
 
 def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seconds: int = 60,
-                                force: bool = False) -> None:
+                                force: bool = False) -> bool:
+    """Returns True if portscan protection ended up active (including
+    "was already active") — False if declined due to a missing
+    prerequisite, or if a rule failed to apply."""
     if env.termux:
         print("[!] No netfilter in Termux — can't block at the firewall level.")
         print("    Use the log-watch option instead for your Termux-hosted services.")
-        return
+        return False
     if not env.root or not env.has_iptables:
         print("[!] Portscan protection needs root + iptables.")
-        return
+        return False
     if statemod.get("portscan_protection") and not force:
         print("[i] Portscan protection already active (per saved state). Disable it first, "
               "or call with force=True to re-apply with new parameters.")
-        return
+        return True  # already genuinely active, not a failure
     cmds = [
         ["iptables", "-N", "PG_PORTSCAN"],
         ["iptables", "-F", "PG_PORTSCAN"],
@@ -126,6 +138,7 @@ def enable_portscan_protection(env: envmod.Environment, hitcount: int = 15, seco
               f"within {seconds}s gets logged + dropped (loopback excluded).")
         print("    Tune hitcount/seconds if legitimate traffic trips it.")
         statemod.update(portscan_protection=True, portscan_params={"hitcount": hitcount, "seconds": seconds})
+    return ok
 
 
 def disable_portscan_protection(env: envmod.Environment) -> None:

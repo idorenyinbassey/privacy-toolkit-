@@ -39,8 +39,12 @@ def full_start(env: envmod.Environment, run_verification: bool = True, bootstrap
             core.randomize_hostname(env)
         else:
             print("[i] Skipping MAC/hostname randomization (randomize_identity=False).")
-        anti_recon.enable_stealth_sysctls(env)
-        anti_recon.enable_portscan_protection(env)
+        if not anti_recon.enable_stealth_sysctls(env):
+            print("[i] Fingerprint-hardening sysctls did not fully apply (see reason above) — "
+                  "continuing anyway, this is best-effort hardening, not a gate on the kill switch.")
+        if not anti_recon.enable_portscan_protection(env):
+            print("[i] Portscan protection did not apply (see reason above) — "
+                  "continuing anyway, this is best-effort hardening, not a gate on the kill switch.")
         kill_switch_active = core.enable_kill_switch(env, bootstrap_timeout=bootstrap_timeout)
         if not kill_switch_active:
             print("[!] Kill switch was NOT enabled (see reason above) — skipping verification, "
